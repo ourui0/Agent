@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Stage artifacts
+*.log
+*.db
+*.sqlite
+
+# Vector DB data
+qdrant_data/
+milvus_data/
+
+# Models
+*.bin
+*.pt
+*.pth
+checkpoints/
