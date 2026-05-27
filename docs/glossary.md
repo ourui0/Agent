@@ -30,3 +30,12 @@
 ---
 
 > ⬇️ 持续追加...
+| @tool | — | 装饰器：将 Python 函数一键注册为 LLM 可调用工具，自动生成 Schema | 阶段三 |
+| Middleware | — | 洋葱模型拦截器：在 Agent 调用前后插入逻辑 | 阶段三 |
+| EventBus | — | 异步发布/订阅总线，解耦组件通信 | 阶段三 |
+| Orchestrator | — | 状态机编排器：节点流 + 条件路由 + 回溯限流 | 阶段三 |
+| Function Calling | — | OpenAI 的 tool use API，本质是 ReAct 的工程化实现 | 阶段三 |
+| Onion Architecture | 洋葱模型 | 中间件分层设计：外层包装内层，请求层层进入、响应层层返回 | 阶段三 |
+| OCP | Open-Closed Principle | 开闭原则：对扩展开放，对修改关闭 | 阶段三 |
+| ReAct Loop | — | Agent 内嵌的多轮推理循环：LLM → tool → observation → LLM | 阶段三 |
+| Pub/Sub | Publish/Subscribe | 发布/订阅模式：发布者和订阅者通过事件总线解耦 | 阶段三 |

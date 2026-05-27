@@ -1,4 +1,4 @@
-﻿# 🌍 旅游规划帝 · Agent 学习项目框架
+# 🌍 旅游规划帝 · Agent 学习项目框架
 
 > 从简单查天气到自主演进的旅游规划帝：一个项目，六次重写，逐层攻克 Agent 核心技术栈。
 
@@ -14,49 +14,55 @@
 
 ## 🗺️ 演进路线图
 
-| 阶段 | 对应章节 | 项目形态 | 核心技术 |
-|------|---------|---------|---------|
-| 阶段一 | 第四章 | 命令行 Agent V1.0 | ReAct / Plan-and-Solve / Reflection |
-| 阶段二 | 第五、六章 | 多端旅游群聊 V2.0 | LangGraph / Coze&Dify / Multi-Agent |
-| 阶段三 | 第七章 | 自研框架 V3.0 | 软件架构抽象、Tool 装饰器、Orchestrator |
-| 阶段四 | 第八、九章 | 带记忆与 RAG 的 V4.0 | 向量检索、上下文裁剪、长期记忆 |
-| 阶段五 | 第十章 | MCP 生态接入 V5.0 | MCP / A2A / ANP 协议 |
-| 阶段六 | 第十一、十二章 | GRPO 微调 V6.0 | 强化学习奖励函数、LLM 训练、评估体系 |
+| 阶段 | 对应章节 | 项目形态 | 核心技术 | 状态 |
+|------|---------|---------|---------|------|
+| 阶段一 | 第四章 | 命令行 Agent V1.0 | ReAct / Plan-and-Solve / Reflection | ✅ |
+| 阶段二 | 第五、六章 | 多端旅游群聊 V2.0 | LangGraph / Coze&Dify / Multi-Agent | ✅ |
+| 阶段三 | 第七章 | 自研框架 V3.0 | 软件架构抽象、Tool 装饰器、Orchestrator | ✅ |
+| 阶段四 | 第八、九章 | 带记忆与 RAG 的 V4.0 | 向量检索、上下文裁剪、长期记忆 | ⬜ |
+| 阶段五 | 第十章 | MCP 生态接入 V5.0 | MCP / A2A / ANP 协议 | ⬜ |
+| 阶段六 | 第十一、十二章 | GRPO 微调 V6.0 | 强化学习奖励函数、LLM 训练、评估体系 | ⬜ |
 
 ---
 
 ## 📁 目录结构
 
-`
-My_Agent/
-├── README.md                # ← 你在这里（项目框架总览）
-├── docs/                    # 笔记与文档
-│   ├── CHANGELOG.md         # 更新日志 & 问题记录 & 思考
-│   ├── reading-notes.md     # 读书笔记 / 论文笔记
-│   └── glossary.md          # 术语表
-├── stages/
-│   ├── stage1-handcraft/    # 手撕三大范式 (ReAct/P&S/Reflection)
-│   ├── stage2-ecosystem/    # LangGraph / Multi-Agent
-│   ├── stage3-self-framework/ # 自研框架
-│   ├── stage4-memory-rag/   # 记忆 & RAG
-│   ├── stage5-mcp-protocols/ # MCP / A2A / ANP
-│   └── stage6-grpo-eval/    # GRPO 训练 & 评估
-├── common/                  # 跨阶段共享工具
-│   ├── base_agent.py
-│   ├── tool_registry.py
-│   └── utils.py
-└── .gitignore
-`
+```
+Agent/
+├── main.py                      # 统一入口 (--stage1/--stage2/--stage3/--serve/--mock)
+├── common/                      # 共享底座 (全阶段共用，随阶段增强)
+│   ├── llm_client.py            # DeepSeek 客户端 (Mock模式 + 单例)
+│   ├── base_agent.py            # Agent 基类
+│   ├── tool_registry.py         # 工具注册器
+│   ├── utils.py                 # JSON解析 / 上下文裁剪 / 序列化
+│   └── tools/
+│       └── travel_tools.py      # 7个旅游工具 + 数据源 (阶段四→RAG 阶段五→MCP)
+├── agents/                      # Agent 实现 (逐阶段扩展)
+│   ├── stage1_react.py          # 阶段一: ReAct (while循环 + 正则解析)
+│   ├── stage1_plan_solve.py     # 阶段一: Plan-and-Solve (三阶段分离)
+│   ├── stage1_reflection.py     # 阶段一: Reflection (角色分离审查)
+│   ├── stage2_state.py          # 阶段二: TravelState (TypedDict)
+│   ├── stage2_nodes.py          # 阶段二: 4个 LangGraph 节点
+│   ├── stage2_graph.py          # 阶段二: StateGraph 组装 + 条件路由
+│   ├── stage2_multi_agent.py    # 阶段二: AutoGen 博弈 (财务-酒店谈判)
+│   ├── stage3_framework.py      # 阶段三: 自研框架 (640行, 5大组件)
+│   └── stage3_travel.py         # 阶段三: 基于自研框架的旅游Agent
+├── api/                         # 接口层 (阶段二引入)
+│   └── server.py                # FastAPI + SSE 流式
+└── docs/                        # 文档
+    ├── CHANGELOG.md             # 更新日志 & 问题记录 & 思考
+    ├── INTERVIEW-CHALLENGES.md  # 面试官拷打点 (28题 + 12个真实Bug)
+    ├── reading-notes.md         # 读书笔记
+    └── glossary.md              # 术语表
+```
 
 ---
 
-## 🛠️ 第一部分：经典范式与框架演进
+## 🛠️ 第一部分：经典范式与框架演进 ✅
 
 ### 阶段一：手撕三大核心范式 (Chapter 4)
 
 **目标**：不依赖任何第三方 Agent 框架，纯手工实现智能体灵魂。
-
-**项目形态**：简陋的命令行旅游助手。
 
 **功能落地**：
 
@@ -66,42 +72,58 @@ My_Agent/
 
 **深层技术点**：手写 while 循环状态机、硬核解析 LLM 结构化输出（JSON/Markdown Tag）
 
-**技术栈**：Python + OpenAI API + 手写状态机 + json.loads()
+**实现文件**：`agents/stage1_react.py` / `stage1_plan_solve.py` / `stage1_reflection.py`
+
+```bash
+python main.py --stage1              # 演示三种范式
+python main.py --stage1 --mode react # 仅 ReAct
+python main.py --mock --stage1       # Mock 模式（无需 API Key）
+```
 
 ---
 
 ### 阶段二：生态对齐与快速原型 (Chapters 5-6)
 
-**目标**：看看工业界和开源社区怎么封装这些范式。
+**目标**：用 LangGraph StateGraph 替代手写循环，接入 AutoGen 增强多 Agent 协作。
 
-**项目形态**：从命令行升级为具备生产力的多端应用。
+**功能落地**：
 
-**两个子方向**：
+| 能力 | 实现 |
+|------|------|
+| 状态图精控 | StateGraph + 4节点 + 条件路由 (超支→回退) |
+| 多智能体协作 | 酒店专家 / 本地土著 / 财务精算 (同一 LLM + 不同 prompt) |
+| AutoGen 博弈 | 超支时财务-酒店 GroupChat 直接谈判降价 |
+| 生产级接口 | FastAPI + SSE 流式 + `/api/v1/plan` |
 
-| 方向 | 内容 | 成果 |
-|------|------|------|
-| 低代码搭建 | Coze/Dify 可视化编排 | Benchmark 基线 |
-| 开源框架重构 | LangGraph StateGraph + AutoGen/AgentScope Multi-Agent | 状态图精控 + 多智能体协作 |
+**实现文件**：`agents/stage2_state.py` / `nodes.py` / `graph.py` / `multi_agent.py`
 
-**技术栈**：LangGraph + AutoGen/AgentScope + Dify/Coze
-
-**多智能体角色**：酒店专家 Agent / 本地土著 Agent / 财务精算 Agent
+```bash
+python main.py                       # 阶段二 LangGraph CLI (默认)
+python main.py --serve               # 启动 FastAPI → http://localhost:8000/docs
+```
 
 ---
 
 ### 阶段三：自研框架破茧成蝶 (Chapter 7)
 
-**目标**：脱离 LangGraph 等第三方框架，用自己写的框架运行旅游助手。
+**目标**：脱离 LangGraph，用纯 Python 640 行实现同等的编排能力。
 
-**项目形态**：自研 Agent 框架 V3.0。
+**五大组件**：
 
-**架构抽象**：
-- Agent 基类（统一接口）
-- Tool 装饰器（一键注册工具）
-- Orchestrator 编排器（控制多 Agent 协作）
-- EventBus 事件总线（解耦通信）
+| 组件 | 行数 | 能力 |
+|------|------|------|
+| `@tool` 装饰器 | 40 | 反射函数签名 → 自动生成 OpenAI function-calling Schema |
+| `BaseAgent` | 80 | ReAct 循环内嵌: LLM→工具→观察→LLM (max 5轮) |
+| `EventBus` | 35 | 异步 pub/sub: `subscribe/emit` + `asyncio.gather` 并发分发 |
+| `MiddlewarePipeline` | 50 | 洋葱模型闭包链: TokenCounter / SafetyFilter |
+| `Orchestrator` | 120 | 状态机: 节点流 + 条件路由 + 回溯限流 (max_backtracks=3) |
 
-**深层技术点**：面向对象设计、中间件机制（日志/安全拦截）、动态工具加载
+**实现文件**：`agents/stage3_framework.py` (框架) + `stage3_travel.py` (业务)
+
+```bash
+python main.py --stage3              # 自研框架运行
+python main.py --stage3 --query "..." # 自定义查询
+```
 
 ---
 
@@ -149,18 +171,37 @@ My_Agent/
 
 | 文档 | 路径 | 说明 |
 |------|------|------|
-| 📋 更新日志 & 问题 & 思考 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | **每次实践后必填** |
-| 📖 读书/论文笔记 | [docs/reading-notes.md](docs/reading-notes.md) | 对应章节的心得 |
+| 📋 更新日志 & 问题 & 思考 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 每次实践后必填，12个真实Bug记录 |
+| 🔥 面试官拷打点 | [docs/INTERVIEW-CHALLENGES.md](docs/INTERVIEW-CHALLENGES.md) | 28道拷打题 + 12个Bug |
+| 📖 读书笔记 | [docs/reading-notes.md](docs/reading-notes.md) | 第4/5/6/7章心得 |
 | 📚 术语表 | [docs/glossary.md](docs/glossary.md) | Agent 领域术语速查 |
 
 ---
 
-## 🚩 开始学习
+## 🚩 快速开始
 
-`ash
-# 从阶段一开始
-cd stages/stage1-handcraft
-# 阅读对应章节第四章, 然后开始写代码
-`
+```bash
+# 安装依赖
+pip install openai langgraph autogen-agentchat autogen-ext fastapi uvicorn sse-starlette tiktoken
 
-> 💡 **建议**：每完成一个阶段的实践，立刻在 docs/CHANGELOG.md 中记录更新日志、遇到的问题和你的思考。
+# 配置 DeepSeek API Key
+export DEEPSEEK_API_KEY="sk-xxx"
+
+# Mock 模式 (无需 API Key，直接演示)
+python main.py --mock
+
+# 阶段二: LangGraph (默认)
+python main.py --query "2人北京3天 预算3000"
+
+# 阶段一: 手写范式
+python main.py --stage1 --mode react
+
+# 阶段三: 自研框架
+python main.py --stage3 --query "1人成都2天 预算1500"
+
+# API 服务
+python main.py --serve
+# → 浏览器打开 http://localhost:8000/docs
+```
+
+> 💡 **建议**：每完成一个阶段的实践，立刻在 `docs/CHANGELOG.md` 中记录更新日志、遇到的问题和你的思考。面试前通读 `docs/INTERVIEW-CHALLENGES.md`。
