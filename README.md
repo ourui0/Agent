@@ -19,8 +19,8 @@
 | 阶段一 | 第四章 | 命令行 Agent V1.0 | ReAct / Plan-and-Solve / Reflection | ✅ |
 | 阶段二 | 第五、六章 | 多端旅游群聊 V2.0 | LangGraph / Coze&Dify / Multi-Agent | ✅ |
 | 阶段三 | 第七章 | 自研框架 V3.0 | 软件架构抽象、Tool 装饰器、Orchestrator | ✅ |
-| 阶段四 | 第八、九章 | 带记忆与 RAG 的 V4.0 | 向量检索、上下文裁剪、长期记忆 | ⬜ |
-| 阶段五 | 第十章 | MCP 生态接入 V5.0 | MCP / A2A / ANP 协议 | ⬜ |
+| 阶段四 | 第八、九章 | 带记忆与 RAG 的 V4.0 | 向量检索、上下文裁剪、长期记忆 | ✅ |
+| 阶段五 | 第十章 | MCP 生态接入 V5.0 | MCP / A2A / ANP 协议 | ✅ |
 | 阶段六 | 第十一、十二章 | GRPO 微调 V6.0 | 强化学习奖励函数、LLM 训练、评估体系 | ⬜ |
 
 ---
@@ -29,15 +29,16 @@
 
 ```
 Agent/
-├── main.py                      # 统一入口 (--stage1/--stage2/--stage3/--serve/--mock)
+├── main.py                      # 统一入口 (--stage1~5 / --chat / --serve / --mock)
+├── chat.py                      # 交互对话 (日程卡片 + 突发指令 + 记忆)
 ├── common/                      # 共享底座 (全阶段共用，随阶段增强)
 │   ├── llm_client.py            # DeepSeek 客户端 (Mock模式 + 单例)
 │   ├── base_agent.py            # Agent 基类
 │   ├── tool_registry.py         # 工具注册器
 │   ├── utils.py                 # JSON解析 / 上下文裁剪 / 序列化
 │   └── tools/
-│       └── travel_tools.py      # 7个旅游工具 + 数据源 (阶段四→RAG 阶段五→MCP)
-├── agents/                      # Agent 实现 (逐阶段扩展)
+│       └── travel_tools.py      # 7个旅游工具 + 数据源
+├── agents/                      # Agent 实现 (逐阶段扩展，14个文件)
 │   ├── stage1_react.py          # 阶段一: ReAct (while循环 + 正则解析)
 │   ├── stage1_plan_solve.py     # 阶段一: Plan-and-Solve (三阶段分离)
 │   ├── stage1_reflection.py     # 阶段一: Reflection (角色分离审查)
@@ -46,13 +47,19 @@ Agent/
 │   ├── stage2_graph.py          # 阶段二: StateGraph 组装 + 条件路由
 │   ├── stage2_multi_agent.py    # 阶段二: AutoGen 博弈 (财务-酒店谈判)
 │   ├── stage3_framework.py      # 阶段三: 自研框架 (640行, 5大组件)
-│   └── stage3_travel.py         # 阶段三: 基于自研框架的旅游Agent
+│   ├── stage3_travel.py         # 阶段三: 基于自研框架的旅游Agent
+│   ├── stage4_memory.py         # 阶段四: 双轨记忆 (Redis+FAISS)
+│   ├── stage4_rag.py            # 阶段四: 混合检索 (BM25+Dense+Rerank)
+│   ├── stage4_compressor.py     # 阶段四: 指代消解 + 摘要压缩
+│   ├── stage4_pipeline.py       # 阶段四: 上下文工程集成管道
+│   ├── stage5_mcp.py            # 阶段五: MCP Client 桥接器 (JSON-RPC 2.0)
+│   └── stage5_a2a.py            # 阶段五: A2A 谈判协议 + ANP 路由器
 ├── api/                         # 接口层 (阶段二引入)
 │   └── server.py                # FastAPI + SSE 流式
 └── docs/                        # 文档
     ├── CHANGELOG.md             # 更新日志 & 问题记录 & 思考
-    ├── INTERVIEW-CHALLENGES.md  # 面试官拷打点 (28题 + 12个真实Bug)
-    ├── reading-notes.md         # 读书笔记
+    ├── INTERVIEW-CHALLENGES.md  # 面试官拷打点 (38题 + 18个真实Bug)
+    ├── reading-notes.md         # 读书笔记 (第4~10章)
     └── glossary.md              # 术语表
 ```
 
@@ -134,23 +141,48 @@ python main.py --stage3 --query "..." # 自定义查询
 **目标**：解决长途旅行中海量信息丢失与上下文爆炸。
 
 **功能实现**：
-- **记忆系统**：Redis 短期会话 + 向量数据库（Milvus/Qdrant）长期偏好
+- **记忆系统**：Redis 短期会话 + FAISS 向量长期偏好
 - **旅游 RAG**：导入小红书攻略、PDF 导览手册，构建知识库
 - **情境理解**：上下文压缩与精简，精准指代消解
 
-**技术栈**：Redis + Milvus/Qdrant + LlamaIndex/LangChain + Embedding 模型
+**技术栈**：Redis + FAISS + BM25 + TF-IDF + DeepSeek API
+
+**实现文件**：`agents/stage4_memory.py` / `rag.py` / `compressor.py` / `pipeline.py`
+
+```bash
+python main.py --stage4 --query "我不吃辣，想去成都，那里有什么好玩的"
+python main.py --chat                     # 交互对话（日程卡片 + 突发指令）
+python main.py --chat --memory local      # 零依赖本地记忆模式
+```
 
 ---
 
 ### 阶段五：打破壁垒 —— 现代通信协议 (Chapter 10)
 
-**目标**：让旅游助手连接全世界生态。
+**目标**：让旅游助手连接全世界生态，拥抱 MCP 标准与 A2A 跨平台通信。
 
 **功能实现**：
-- **MCP 实战**：接入谷歌日历、Notion、本地文件系统
-- **A2A/ANP 协议**：Agent 间跨平台直接对话与交易协商
 
-**技术栈**：MCP SDK + A2A 协议 + ANP 协议
+| 组件 | 行数 | 能力 |
+|------|------|------|
+| `MCPClientBridge` | 135 | JSON-RPC 2.0 握手 → tools/list 动态发现 → tools/call 代理执行 |
+| 传输层抽象 | 200 | stdio / HTTP / Mock 三种传输，可插拔架构 |
+| `NegotiationFSM` | 70 | A2A 谈判状态机: PROPOSE→COUNTER→ACCEPT/REJECT |
+| `AgentNetworkRouter` | 130 | ANP URI 寻址 (`anp://ctrip.com/hotel-agent`) + EventBus 事件驱动 |
+| `A2ASecurityMiddleware` | 60 | 反欺诈拦截：金额上限/黑名单/无效URI检测 |
+
+**技术栈**：JSON-RPC 2.0 + MCP 协议 + A2A 谈判协议 + ANP 寻址 + WebSocket
+
+**实现文件**：`agents/stage5_mcp.py` (425行) + `stage5_a2a.py` (534行)
+
+```bash
+python main.py --stage5              # MCP 工具发现 + A2A 谈判演示
+```
+
+**面试亮点**：
+- MCP 桥接器严格遵循 JSON-RPC 2.0 标准（`jsonrpc: "2.0"`, `method`, `params`）
+- ANP 路由器复用阶段三自研 `EventBus`，事件驱动跨平台 Agent 通信
+- A2A 安全中间件预留反欺诈接口，可对接生产级风控
 
 ---
 
@@ -171,9 +203,9 @@ python main.py --stage3 --query "..." # 自定义查询
 
 | 文档 | 路径 | 说明 |
 |------|------|------|
-| 📋 更新日志 & 问题 & 思考 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 每次实践后必填，12个真实Bug记录 |
-| 🔥 面试官拷打点 | [docs/INTERVIEW-CHALLENGES.md](docs/INTERVIEW-CHALLENGES.md) | 28道拷打题 + 12个Bug |
-| 📖 读书笔记 | [docs/reading-notes.md](docs/reading-notes.md) | 第4/5/6/7章心得 |
+| 📋 更新日志 & 问题 & 思考 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 每次实践后必填，18个真实Bug记录 |
+| 🔥 面试官拷打点 | [docs/INTERVIEW-CHALLENGES.md](docs/INTERVIEW-CHALLENGES.md) | 38道拷打题 + 18个Bug |
+| 📖 读书笔记 | [docs/reading-notes.md](docs/reading-notes.md) | 第4~10章心得 |
 | 📚 术语表 | [docs/glossary.md](docs/glossary.md) | Agent 领域术语速查 |
 
 ---
@@ -182,22 +214,22 @@ python main.py --stage3 --query "..." # 自定义查询
 
 ```bash
 # 安装依赖
-pip install openai langgraph autogen-agentchat autogen-ext fastapi uvicorn sse-starlette tiktoken
+pip install openai langgraph autogen-agentchat autogen-ext fastapi uvicorn sse-starlette tiktoken redis faiss-cpu rank-bm25
 
 # 配置 DeepSeek API Key
 export DEEPSEEK_API_KEY="sk-xxx"
 
-# Mock 模式 (无需 API Key，直接演示)
-python main.py --mock
+# ⭐ 交互对话模式 (推荐)
+python main.py --chat                     # 真实 API
+python main.py --chat --mock              # Mock 模式
+python main.py --chat --memory local      # 零依赖本地记忆
 
-# 阶段二: LangGraph (默认)
-python main.py --query "2人北京3天 预算3000"
-
-# 阶段一: 手写范式
-python main.py --stage1 --mode react
-
-# 阶段三: 自研框架
-python main.py --stage3 --query "1人成都2天 预算1500"
+# 各阶段演示
+python main.py --stage1 --mode react      # 阶段一: 手写范式
+python main.py --query "2人北京3天"       # 阶段二: LangGraph (默认)
+python main.py --stage3                   # 阶段三: 自研框架
+python main.py --stage4                   # 阶段四: 记忆与RAG
+python main.py --stage5                   # 阶段五: MCP + A2A 协议
 
 # API 服务
 python main.py --serve

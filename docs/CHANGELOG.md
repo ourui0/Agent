@@ -156,3 +156,81 @@
 - **Middleware 洋葱模型是框架扩展性的关键**：TokenCounter 和 SafetyFilter 的实现各不到 15 行，但通过 `MiddlewarePipeline` 的闭包链式组合，可以实现任意复杂的请求拦截和增强——这是开闭原则（OCP）的经典体现。
 
 **下一步**：阶段四 —— 记忆系统 (Redis + 向量数据库) 与 RAG 知识库接入。
+
+### [2026-05-28] [阶段四] 上下文工程与记忆存储
+
+**做了啥**：实现双轨制记忆系统 + 旅游 RAG + 上下文压缩管道。包含三大组件：
+- `TravelMemoryManager`: Redis 滑动窗口短期记忆 + FAISS 向量长期偏好检索，双轨全分流
+- `TravelRAG`: BM25 关键词 + Dense 语义向量的混合检索，含轻量 Reranker (规则+语义) 二次精选 Top-3
+- `ContextCompressor`: LLM 指代消解 ("那里"→"成都") + 超阈值自动摘要压缩
+
+**踩了啥坑**：
+
+- **坑1：TF-IDF 嵌入器的延迟拟合时机**
+  - 现象：首次调用 `encode()` 时矩阵未拟合，返回全零向量 → FAISS 检索全失效
+  - 原因：TF-IDF 需要语料训练，但首次调用时还没有语料
+  - 解法：`_ensure_fitted()` 在构造时用预置语料预热；首次检索时如果未拟合，用字符 n-gram 哈希兜底
+
+- **坑2：FAISS IndexFlatIP 需要 L2 归一化才是余弦相似度**
+  - 现象：检索结果与预期不符，相似度分数无意义
+  - 原因：`IndexFlatIP` 做的是内积，不是余弦相似度。需要插入前和查询前都对向量做 `faiss.normalize_L2()`
+  - 解法：插入和查询时都归一化，内积 = 余弦相似度
+
+- **坑3：BM25 对中文的分词问题**
+  - 现象：BM25 默认按空格分词，中文全连在一起变成单个 token → 检索失效
+  - 原因：中文没有空格分词
+  - 解法：`_tokenize()` 按字符切分 + bigram 覆盖词组 ("故宫" → ["故","宫","故宫"])，无需 jieba 也能工作
+
+**悟了啥**：
+
+- **双轨记忆的本质是"信息生命周期管理"**：短期记忆是"最近说了什么"（会话连贯性），长期记忆是"用户是什么样的人"（个性化）。两者分流后，短期可以大胆丢弃（LRU），长期可以慢慢积累（向量永不失效）。
+
+- **混合检索的 α 值是业务参数不是算法参数**：BM25 权重 α=0.3 适合口语化查询（小红书风格），如果换成正式文档（维基百科风格）应该调高到 0.5。这不是调参问题，是对数据源的理解。
+
+- **降级不只是 try/except，而是"有多少能力做多少事"**：Redis 不可用 → 内存 dict，FAISS 不可用 → numpy 余弦，TF-IDF 未拟合 → 哈希嵌入。每一层都有 Plan B，连降三级的系统比"完美环境"下的系统更有说服力。
+
+**下一步**：阶段五 —— MCP 协议接入，让 Agent 连接谷歌日历、Notion、文件系统。
+
+### [2026-05-28] [阶段五] MCP + A2A + ANP 协议栈实现
+
+**做了啥**：
+- 实现工业级 MCP Client 桥接器，基于 JSON-RPC 2.0 标准：`tools/list` 动态工具发现 + `tools/call` 代理执行
+- 实现 A2A 跨平台会话协议栈：结构化消息模型 + 谈判 FSM（PROPOSE→COUNTER→ACCEPT/REJECT）
+- 实现 ANP 路由器：URI 寻址（`anp://ctrip.com/hotel-agent`）+ EventBus 事件驱动 + Mock WebSocket 传输
+- 可插拔传输层抽象：stdio / HTTP / Mock 三种模式，通过 `MCPTransport` ABC 统一接口
+- A2A 安全中间件：反欺诈拦截（金额上限/黑名单/无效 URI 检测）
+
+**踩了啥坑**：
+
+- **坑1：Mock 模式下 Transport 返回的 JSON 格式与 MCP 标准不一致**
+  - 现象：`tools/list` 返回的工具名正确但参数 schema 丢失
+  - 原因：Mock 数据手动构造时遗漏了 `inputSchema` 字段，MCP 标准要求 `{"name":"...", "inputSchema":{"type":"object","properties":{...}}}`
+  - 解法：统一 Mock 返回格式，严格对齐 MCP 标准 JSON Schema 结构
+
+- **坑2：A2A NegotiationFSM 的 `conversation_id` 跨轮次丢失**
+  - 现象：PROPOSE 和 COUNTER 各自的 `conversation_id` 不同，服务端无法关联会话
+  - 原因：`A2AMessage` 使用 `field(default_factory=lambda: str(uuid.uuid4()))` 每轮生成新 ID
+  - 解法：首次消息生成 `conversation_id`，后续轮次显式传入同一 ID
+
+- **坑3：ANP 路由器 EventBus 回调中异步状态机推进导致死锁**
+  - 现象：`emit('outbound_negotiation')` → 回调中 `await fsm.step()` → fsm 内部再次 `emit` → 递归死锁
+  - 原因：asyncio.gather 等待所有回调完成，但回调中触发了新的 emit 形成循环依赖
+  - 解法：外部 `emit` 用 `asyncio.create_task` 火发模式（fire-and-forget），内部状态变更用同步回调
+
+- **坑4：MCPClientBridge 重复注册工具到 ToolRegistry 导致名称冲突**
+  - 现象：多次调用 `connect()` 后，同一个 MCP 工具在 ToolRegistry 中出现多次
+  - 原因：没有做幂等检查，每次 connect 都 `register()` 一次
+  - 解法：`register()` 前检查 `has_tool()`，已存在的跳过；增加 `disconnect()` 清理逻辑
+
+**悟了啥**：
+
+- **MCP 的本质不是"又一个 API 规范"，而是"工具的 USB-C 接口"**：就像 USB-C 统一了充电和数据传输，MCP 统一了 LLM 与外部工具的连接方式。以前每个工具都要写定制 adapter，MCP 之后只要 Server 实现了 `tools/list`，Client 就能自动发现和调用。
+
+- **A2A 谈判状态机的核心不是状态数量，而是超时和降级**：PROPOSE→COUNTER→ACCEPT 三个状态就够了，但每个状态都必须有 `on_timeout` → 回退到上一状态或 REJECT 的兜底逻辑。没有超时处理的 FSM 不是生产级 FSM。
+
+- **ANP URI 寻址是"Agent 的 DNS"**：`anp://ctrip.com/hotel-agent` 这种可读 URI 让跨平台 Agent 通信从"IP 地址直连"升级到"域名寻址"。路由层负责 URI→传输层的映射，上层业务不感知底层是 WebSocket 还是 gRPC。
+
+- **可插拔传输层的价值在 Mock 测试**：`MCPTransport` ABC 的三层实现中，`MockTransport` 的 100 行代码让整个协议栈可以在无外部依赖的情况下完成集成测试——这才是面向接口编程的真正价值。
+
+**下一步**：阶段六 —— GRPO 强化学习微调，让模型更懂旅游规划。
+

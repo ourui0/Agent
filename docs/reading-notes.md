@@ -127,3 +127,75 @@
 - 如果 Orchestrator 的节点需要并行执行（如同时查天气和查酒店），当前的顺序循环怎么扩展？是否需要引入 asyncio.TaskGroup？
 - Middleware 的闭包链在 10+ 层中间件时性能如何？是否需要改为迭代式调用？
 - EventBus 的 `asyncio.gather` 在回调中有耗时操作时会阻塞 `emit` 返回——是否需要改为 `create_task` 的火力发模式（fire-and-forget）？
+
+### [2026-05-28] 第八、九章：上下文工程与记忆存储
+
+**核心概念**：
+
+- **双轨记忆 (Dual-Track Memory)**：短期记忆存"最近说了什么"（Redis 滑动窗口，LRU 淘汰），长期记忆存"用户是什么样的人"（FAISS 向量检索，永久保留）。本质是信息生命周期管理——不同价值的信息用不同的存储和淘汰策略。
+
+- **混合检索 (Hybrid Search)**：BM25（关键词精确匹配）+ Dense（语义向量相似）融合排序。α 权重不是超参，而是对数据源特性的建模——口语化查询（小红书风格）需要更高的语义权重，结构化文档（维基百科）需要更高的关键词权重。
+
+- **指代消解 (Coreference Resolution)**：把"它/那里/那个"替换为明确的实体。两层策略：LLM 深度消解（准确但慢）vs 规则快速替换（就近匹配，零延迟）。什么时候用哪个取决于上下文复杂度。
+
+- **上下文压缩 (Context Compression)**：当对话轮次超阈值时，把"尘埃落定"的前 N 轮压缩为一段背景摘要，只保留最近 K 轮的原样。核心假设：对话越久，每轮的新增信息量越少，前几轮可以安全压缩。
+
+- **三级降级 (Graceful Degradation)**：FAISS（GPU加速）→ numpy 余弦（纯CPU）→ 字符哈希（零依赖）。每一层都有 Plan B，系统不假设任何外部服务可用。
+
+**金句摘录**：
+
+- "短期记忆是对话的血液，长期记忆是用户的灵魂"
+- "α 不是调出来的，是对数据源理解的量化表达"
+- "降级不是 try/except，是'有多少能力做多少事'的设计哲学"
+
+**与项目的关联**：
+
+- 双轨记忆在 `stage4_memory.py`：`TravelMemoryManager` + `SimpleEmbedder`
+- RAG 在 `stage4_rag.py`：`HybridRetriever` + `LightweightReranker` + 21条预置攻略
+- 压缩在 `stage4_compressor.py`：`CoreferenceResolver` + `ContextCompressor`
+- 集成在 `stage4_pipeline.py`：`ContextPipeline` 连接所有组件
+- 交互模式在 `chat.py`：支持突发指令（受伤/生病）+ 计划修改（添加/删除/替换）
+
+**疑问**：
+
+- 长期偏好的 Embedding 用 TF-IDF（128维）在小红书风格文本上效果如何？是否需要换成 sentence-transformer 的 384 维语义向量？
+- 摘要压缩的质量有没有办法自动评估？比如压缩后能否正确回答原对话中的关键问题（压缩保真度）？
+- 如果会话持续 100 轮，压缩后的摘要本身也需要压缩——二级压缩怎么做？
+
+### [2026-05-28] 第十章：MCP 协议与跨平台 Agent 通信
+
+**核心概念**：
+
+- **MCP (Model Context Protocol)**：Anthropic 提出的 LLM 与外部工具/数据源的标准化连接协议。核心思想是把"工具调用"从每个框架的自定义实现抽象为统一的 Client-Server 协议——Server 暴露 `tools/list` 和 `resources/list`，Client 通过 JSON-RPC 2.0 调用 `tools/call`。本质是"工具的 USB-C 接口"。
+
+- **JSON-RPC 2.0**：MCP 的底层通信协议。一个 `id` 对应一个请求-响应对，支持 batch 请求。关键字段：`jsonrpc: "2.0"`, `method`, `params`, `id`。错误码规范：-32700（解析错误）、-32600（无效请求）、-32601（方法不存在）。
+
+- **A2A (Agent-to-Agent) 协议**：Google 提出的跨平台 Agent 直接通信协议。核心是结构化消息（`sender_uri`, `receiver_uri`, `intent`, `payload`）+ 会话状态管理。和 MCP 的区别：MCP 是"Agent 调工具"，A2A 是"Agent 调 Agent"。
+
+- **ANP (Agent Network Protocol)**：基于 URI 的 Agent 寻址协议。`anp://domain/agent-path` 格式，类似 DNS 之于 IP 地址——让 Agent 通信从"硬编码地址"升级到"可路由域名"。路由层负责 URI → 传输层的映射（WebSocket/gRPC/stdio）。
+
+- **谈判状态机 (Negotiation FSM)**：A2A 的核心模式。状态：IDLE → PROPOSING → COUNTERING → ACCEPTED/REJECTED。每个状态都有 `on_timeout` 回调，防止死等。关键设计：有限状态 + 超时兜底 = 生产级鲁棒性。
+
+**金句摘录**：
+
+- "MCP 不做任何 AI 的事——它只做一件事：让 AI 能调用任何东西"
+- "A2A 是 Agent 之间的 REST API"
+- "好的协议不只是定义格式，更重要的是定义错误处理"
+- "URI 寻址让 Agent 通信从局域网走向互联网"
+
+**与项目的关联**：
+
+- MCP 桥接器在 `stage5_mcp.py`：`MCPClientBridge` + 三层传输抽象（stdio/HTTP/Mock）
+- JSON-RPC 2.0 模型在 `stage5_mcp.py`：`JSONRPCRequest` / `JSONRPCResponse` 严格遵循标准
+- A2A 协议栈在 `stage5_a2a.py`：`A2AMessage` 消息模型 + `NegotiationFSM` 状态机
+- ANP 路由器在 `stage5_a2a.py`：`AgentNetworkRouter` + `ANPRouteEntry` + EventBus 集成
+- 安全中间件在 `stage5_a2a.py`：`A2ASecurityMiddleware` 反欺诈拦截
+- Mock 传输层支持无外部依赖的完整集成测试
+
+**疑问**：
+
+- MCP 的 `resources/list` 返回的"资源"（如 `file:///travel/beijing-guide.md`）和 RAG 知识库的文档是什么关系？是替代还是互补？
+- A2A 协议如果对方 Agent 也是基于 LLM 的，会不会出现两个 LLM 互相"礼貌循环"（"您先请"→"不，您先请"）？如何设计终止条件？
+- ANP 的 URI 寻址在公网环境下如何保证安全？是否需要 mTLS 或其他证书验证？
+- 如果 MCP Server 挂了，Agent 是直接报错还是降级到本地工具？降级策略如何不影响用户体验？
+

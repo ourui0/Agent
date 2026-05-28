@@ -39,3 +39,12 @@
 | OCP | Open-Closed Principle | 开闭原则：对扩展开放，对修改关闭 | 阶段三 |
 | ReAct Loop | — | Agent 内嵌的多轮推理循环：LLM → tool → observation → LLM | 阶段三 |
 | Pub/Sub | Publish/Subscribe | 发布/订阅模式：发布者和订阅者通过事件总线解耦 | 阶段三 |
+| BM25 | Best Match 25 | 基于词频的经典检索算法，TF-IDF 的概率变体 | 阶段四 |
+| Dense Retrieval | 稠密检索 | 用向量相似度检索，而非关键词匹配 | 阶段四 |
+| Reranker | 重排器 | 对初步检索结果做二次排序，提升精准度 | 阶段四 |
+| Coreference Resolution | 指代消解 | 把"它"、"那里"替换为明确实体 | 阶段四 |
+| Sliding Window | 滑动窗口 | 只保留最近 N 条记录，旧数据自动淘汰 | 阶段四 |
+| LRU | Least Recently Used | 最近最少使用淘汰策略 | 阶段四 |
+| FAISS | — | Facebook 开源的向量检索引擎 | 阶段四 |
+| Hybrid Search | 混合检索 | 关键词 + 语义向量融合排序 | 阶段四 |
+| Background Summary | 背景摘要 | 将多轮历史对话压缩为一段摘要 | 阶段四 |
