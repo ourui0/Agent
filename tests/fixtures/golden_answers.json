@@ -1,0 +1,22 @@
+{
+  "solo_beijing_3d": {"required_fields": ["city", "days", "budget"], "city": "北京", "max_budget": 3000},
+  "couple_chengdu_spicy": {"required_fields": ["city", "days", "budget", "preferences"], "city": "成都", "preferences": ["不吃辣"]},
+  "family_sanya_beach": {"required_fields": ["city", "days", "people"], "city": "三亚", "people": 3},
+  "rainy_shanghai": {"required_fields": ["weather_plan"], "must_include_any": ["室内", "博物馆", "雨"]},
+  "tight_budget_chengdu": {"required_fields": ["budget"], "max_budget": 300},
+  "flight_change": {"required_fields": ["modified_itinerary"], "must_include_any": ["缩短", "晚上", "改签"]},
+  "elder_lhasa": {"required_fields": ["accessibility"], "must_include_any": ["老人", "休息", "海拔"]},
+  "kid_friendly": {"required_fields": ["family_friendly"], "must_include_any": ["亲子", "孩子"]},
+  "food_wuhan": {"required_fields": ["restaurants", "budget"], "max_budget": 500},
+  "hotel_low": {"required_fields": ["hotels"], "max_hotel_per_night": 200},
+  "business_shenzhen": {"required_fields": ["area"], "must_include_any": ["福田"]},
+  "winter_harbin": {"required_fields": ["weather_plan"], "must_include_any": ["冰雪大世界", "保暖"]},
+  "allergy_seafood": {"required_fields": ["preferences"], "preferences": ["不吃海鲜"]},
+  "split_bill": {"required_fields": ["per_person"], "people": 4},
+  "visa_tokyo": {"required_fields": ["visa", "budget"], "city": "东京"},
+  "emergency": {"required_fields": ["emergency_plan"], "must_include_any": ["医院", "发烧", "急诊"]},
+  "avoid_crowds": {"required_fields": ["tips"], "must_include_any": ["预约", "错峰"]},
+  "museum_nanjing": {"required_fields": ["itinerary"], "city": "南京"},
+  "short_layover": {"required_fields": ["time_window"], "max_hours": 8},
+  "anniversary": {"required_fields": ["hotel", "restaurants"], "city": "厦门"}
+}

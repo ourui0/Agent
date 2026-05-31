@@ -6,7 +6,7 @@
 - resources/list → 动态发现外部数据资源
 - tools/call → 代理执行外部工具，结果合并到 TravelState
 
-传输层: stdio / HTTP / WebSocket (可插拔)
+传输层: stdio / HTTP(aiohttp) / RealAPI(高德地图) / Mock (可插拔)
 """
 
 import asyncio
@@ -57,7 +57,7 @@ class MCPTransport(ABC):
     async def connect(self): ...
 
     @abstractmethod
-    async def send(self, message: bytes): ...
+    async def send(self, message: bytes) -> Optional[bytes]: ...
 
     @abstractmethod
     async def receive(self) -> bytes: ...
@@ -82,10 +82,11 @@ class StdioTransport(MCPTransport):
         )
         logger.info(f"MCP stdio 已连接: {' '.join(self.command)}")
 
-    async def send(self, message: bytes):
+    async def send(self, message: bytes) -> Optional[bytes]:
         if self._process and self._process.stdin:
             self._process.stdin.write(message + b"\n")
             await self._process.stdin.drain()
+        return None
 
     async def receive(self) -> bytes:
         if self._process and self._process.stdout:
@@ -100,7 +101,11 @@ class StdioTransport(MCPTransport):
 
 
 class HTTPTransport(MCPTransport):
-    """HTTP 传输: 通过 HTTP POST 通信 (用于远端 MCP Server)。"""
+    """
+    HTTP 传输: 通过 aiohttp POST 与远端 MCP Server 通信。
+
+    直接对接任何兼容 MCP HTTP 协议的 Server。
+    """
 
     def __init__(self, endpoint: str):
         self.endpoint = endpoint
@@ -108,20 +113,20 @@ class HTTPTransport(MCPTransport):
     async def connect(self):
         logger.info(f"MCP HTTP 端点: {self.endpoint}")
 
-    async def send(self, message: bytes) -> bytes:
-        import urllib.request
-        req = urllib.request.Request(
-            self.endpoint,
-            data=message,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        loop = asyncio.get_event_loop()
-        resp = await loop.run_in_executor(None, urllib.request.urlopen, req)
-        return resp.read()
+    async def send(self, message: bytes) -> Optional[bytes]:
+        """发送 JSON-RPC 请求，返回响应体 (HTTP 是请求-响应模式)。"""
+        import aiohttp
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                self.endpoint,
+                data=message,
+                headers={"Content-Type": "application/json"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                return await resp.read()
 
     async def receive(self) -> bytes:
-        return b""  # HTTP 是请求-响应模式
+        return b""  # HTTP 模式: 响应已在 send 中返回
 
     async def close(self): pass
 
@@ -136,8 +141,9 @@ class MockTransport(MCPTransport):
     async def connect(self):
         logger.info(f"MCP Mock 传输就绪: {self.server_name}")
 
-    async def send(self, message: bytes):
+    async def send(self, message: bytes) -> Optional[bytes]:
         self._pending.append(message)
+        return None
 
     async def receive(self) -> bytes:
         if self._pending:
@@ -152,71 +158,66 @@ class MockTransport(MCPTransport):
         method = request.get("method", "")
         rid = request.get("id", "")
 
-        # Handle initialize
         if method == "initialize":
             return {
                 "jsonrpc": "2.0", "id": rid,
                 "result": {
                     "protocolVersion": "2024-11-05",
-                    "serverInfo": {"name": self.server_name, "version": "1.0.0"},
-                    "capabilities": {"tools": {}, "resources": {}},
+                    "serverInfo": {"name": "mock-server", "version": "1.0.0"},
+                    "capabilities": {"tools": {"listChanged": False}, "resources": {"subscribe": False}},
                 },
             }
 
         if method == "tools/list":
             return {
                 "jsonrpc": "2.0", "id": rid,
-                "result": {
-                    "tools": [
-                        {
-                            "name": "amap_search_poi",
-                            "description": "高德地图POI搜索: 查找周边酒店/餐厅/医院",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "keywords": {"type": "string", "description": "搜索关键词"},
-                                    "city": {"type": "string", "description": "城市"},
-                                    "types": {"type": "string", "description": "POI类型: 酒店|餐饮|医院"},
-                                },
-                                "required": ["keywords", "city"],
+                "result": {"tools": [
+                    {
+                        "name": "amap_search_poi",
+                        "description": "高德地图POI搜索: 查找周边酒店/餐厅/医院",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "keywords": {"type": "string", "description": "搜索关键词"},
+                                "city": {"type": "string", "description": "城市名"},
+                                "types": {"type": "string", "description": "POI分类: 餐饮/住宿/风景名胜/医疗"},
                             },
+                            "required": ["keywords"],
                         },
-                        {
-                            "name": "amap_geocode",
-                            "description": "高德地理编码: 地址→坐标",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "address": {"type": "string", "description": "详细地址"},
-                                },
-                                "required": ["address"],
+                    },
+                    {
+                        "name": "amap_geocode",
+                        "description": "高德地理编码: 地址→坐标",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "address": {"type": "string", "description": "地址字符串"},
                             },
+                            "required": ["address"],
                         },
-                        {
-                            "name": "fs_read_file",
-                            "description": "读取本地文件内容",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "path": {"type": "string", "description": "文件路径"},
-                                },
-                                "required": ["path"],
+                    },
+                    {
+                        "name": "fs_read_file",
+                        "description": "读取本地文件内容",
+                        "inputSchema": {
+                            "type": "object",
+                            "properties": {
+                                "path": {"type": "string", "description": "文件路径"},
                             },
+                            "required": ["path"],
                         },
-                    ]
-                },
+                    },
+                ]},
             }
 
         if method == "resources/list":
             return {
                 "jsonrpc": "2.0", "id": rid,
-                "result": {
-                    "resources": [
-                        {"uri": "file:///travel/beijing-guide.md", "name": "北京攻略", "mimeType": "text/markdown"},
-                        {"uri": "file:///travel/chengdu-food.md", "name": "成都美食地图", "mimeType": "text/markdown"},
-                        {"uri": "calendar://google/primary", "name": "Google日历", "mimeType": "application/json"},
-                    ],
-                },
+                "result": {"resources": [
+                    {"uri": "file:///travel/beijing-guide.md", "name": "北京攻略"},
+                    {"uri": "file:///travel/chengdu-food.md", "name": "成都美食地图"},
+                    {"uri": "calendar://google/primary", "name": "我的日历"},
+                ]},
             }
 
         if method == "tools/call":
@@ -225,24 +226,108 @@ class MockTransport(MCPTransport):
             result = self._mock_tool_call(tool_name, args)
             return {"jsonrpc": "2.0", "id": rid, "result": result}
 
-        return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"Unknown method: {method}"}}
+        return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"未知方法: {method}"}}
 
     def _mock_tool_call(self, name: str, args: dict) -> dict:
-        """模拟工具调用结果。"""
+        """Mock 工具执行结果。"""
         if name == "amap_search_poi":
-            poi_type = args.get("types", "酒店")
-            city = args.get("city", "北京")
-            return {
-                "content": [
-                    {"type": "text", "text": f"[{city}] {poi_type}搜索结果:\n"
-                     f"1. {city}大酒店 ★4.5  ¥380/晚\n2. {city}客栈 ★4.2  ¥180/晚\n3. {city}青旅 ★3.8  ¥60/晚"}
-                ],
-            }
+            types = args.get("types", "餐饮")
+            city = args.get("city", "成都")
+            kw = args.get("keywords", "")
+            return {"content": [{"type": "text", "text": f"[{city}] {types}搜索结果:\n"
+                f"1. {kw or city}大酒店 ★4.5  ¥380/晚\n"
+                f"2. {kw or city}客栈 ★4.2  ¥180/晚\n"
+                f"3. {kw or city}青旅 ★3.8  ¥60/晚"}]}
         if name == "amap_geocode":
-            return {"content": [{"type": "text", "text": "坐标: 116.397, 39.908 (北京天安门)"}]}
+            return {"content": [{"type": "text", "text": "坐标: 104.066,30.573"}]}
         if name == "fs_read_file":
-            return {"content": [{"type": "text", "text": "# 旅行攻略\n推荐景点: 故宫、长城、颐和园"}]}
-        return {"content": [{"type": "text", "text": f"工具 {name} 执行完成"}]}
+            return {"content": [{"type": "text", "text": f"# {args.get('path','file').split('/')[-1]}\n\nMock 文件内容..."}]}
+        return {"content": [{"type": "text", "text": f"Mock: {name} 执行成功"}]}
+
+
+class RealAPITransport(MCPTransport):
+    """
+    真实 API 传输: 对接高德地图 Web 服务 API。
+
+    以 MCP 协议形式暴露 tools/list 和 tools/call，
+    底层实际调用 common.tools.real_api_tools 中的异步函数。
+
+    用法:
+        transport = RealAPITransport()
+        bridge = MCPClientBridge(transport=transport)
+    """
+
+    def __init__(self):
+        self._initialized = False
+
+    async def connect(self):
+        from common.tools.real_api_tools import REAL_TOOLS_SCHEMA
+        self._tools_schema = REAL_TOOLS_SCHEMA
+        self._initialized = True
+        logger.info(f"🌐 RealAPI MCP 传输就绪: 高德地图 ({len(self._tools_schema)} 个工具)")
+
+    async def send(self, message: bytes) -> Optional[bytes]:
+        """RealAPI 模式: send+receive 合并，处理 JSON-RPC 请求并返回响应。"""
+        req_data = json.loads(message.decode())
+        response = await self._handle_request(req_data)
+        return json.dumps(response, ensure_ascii=False).encode()
+
+    async def receive(self) -> bytes:
+        return b""
+
+    async def close(self):
+        pass
+
+    async def _handle_request(self, request: dict) -> dict:
+        """处理 JSON-RPC 请求，路由到真实 API。"""
+        method = request.get("method", "")
+        rid = request.get("id", "")
+
+        if method == "initialize":
+            return {
+                "jsonrpc": "2.0", "id": rid,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {"name": "real-api-server", "version": "1.0.0"},
+                    "capabilities": {"tools": {"listChanged": False}},
+                },
+            }
+
+        if method == "tools/list":
+            return {
+                "jsonrpc": "2.0", "id": rid,
+                "result": {"tools": self._tools_schema},
+            }
+
+        if method == "resources/list":
+            return {
+                "jsonrpc": "2.0", "id": rid,
+                "result": {"resources": []},
+            }
+
+        if method == "tools/call":
+            tool_name = request.get("params", {}).get("name", "")
+            args = request.get("params", {}).get("arguments", {})
+            result = await self._call_real_tool(tool_name, args)
+            return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+        return {"jsonrpc": "2.0", "id": rid, "error": {"code": -32601, "message": f"未知方法: {method}"}}
+
+    async def _call_real_tool(self, name: str, args: dict) -> dict:
+        """调用真实 API。"""
+        from common.tools.real_api_tools import REAL_TOOL_HANDLERS
+
+        handler = REAL_TOOL_HANDLERS.get(name)
+        if handler is None:
+            return {"content": [{"type": "text", "text": f"未知工具: {name}"}], "isError": True}
+
+        try:
+            result = await handler(**args)
+            text = json.dumps(result, ensure_ascii=False, indent=2)
+            return {"content": [{"type": "text", "text": text}]}
+        except Exception as e:
+            logger.error(f"真实API调用失败 [{name}]: {e}")
+            return {"content": [{"type": "text", "text": f"API调用失败: {e}"}], "isError": True}
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -253,16 +338,23 @@ class MCPClientBridge:
     """
     MCP 客户端桥接器 — 连接外部 MCP Server，动态发现 + 代理执行工具。
 
+    支持四种传输层:
+      - StdioTransport:  本地 MCP Server 子进程
+      - HTTPTransport:   远端 MCP Server HTTP 端点 (aiohttp)
+      - RealAPITransport: 直连高德地图真实 API (无需额外 Server)
+      - MockTransport:   本地测试数据
+
     用法:
+        # Mock 模式
         bridge = MCPClientBridge(transport=MockTransport("amap"))
-        await bridge.connect()
-        await bridge.initialize()
+        await bridge.connect(); await bridge.initialize()
 
-        tools = await bridge.list_tools()        # → 高德POI搜索、地理编码...
-        resources = await bridge.list_resources() # → 本地文件、Google日历...
+        # 真实 API 模式
+        bridge = MCPClientBridge(transport=RealAPITransport())
+        await bridge.connect(); await bridge.initialize()
 
-        result = await bridge.call_tool("amap_search_poi",
-            {"keywords": "火锅", "city": "成都", "types": "餐饮"})
+        tools = await bridge.list_tools()  # → tools/call 阶段自动调用真实 API
+        result = await bridge.call_tool("amap_search_poi", {"keywords": "火锅", "city": "成都"})
     """
 
     def __init__(self, transport: MCPTransport):
@@ -291,11 +383,11 @@ class MCPClientBridge:
         if resp.ok:
             self._server_info = resp.result
             self._initialized = True
-            logger.info(f"✅ MCP 握手完成: {self._server_info.get('serverInfo', {}).get('name', 'unknown')}")
+            server_name = self._server_info.get("serverInfo", {}).get("name", "unknown")
+            logger.info(f"✅ MCP 握手完成: {server_name}")
         else:
-            logger.warning(f"MCP 握手: 非标准响应，尝试直接使用")
+            logger.warning("MCP 握手: 非标准响应，尝试直接使用")
 
-        # 发送 initialized 通知
         await self._rpc_notify("notifications/initialized", {})
 
     async def list_tools(self) -> List[Dict]:
@@ -326,11 +418,11 @@ class MCPClientBridge:
             "name": name,
             "arguments": arguments,
         })
-        logger.info(f"🔧 MCP 调用: {name}({arguments})")
+        logger.info(f"🔧 MCP 调用: {name}({json.dumps(arguments, ensure_ascii=False)})")
         resp = await self._rpc_call(req)
         if resp.ok:
             return resp.result
-        return {"content": [{"type": "text", "text": f"Error: {resp.error}"}]}
+        return {"content": [{"type": "text", "text": f"Error: {resp.error}"}], "isError": True}
 
     def on_tool_update(self, callback: Callable):
         """注册工具列表变更回调。"""
@@ -347,27 +439,39 @@ class MCPClientBridge:
             "id": request.id,
         }, ensure_ascii=False)
 
-        # HTTP transport: send already returns response
-        if isinstance(self.transport, HTTPTransport):
+        # RealAPI / HTTP transport: send 直接返回响应
+        if isinstance(self.transport, (HTTPTransport, RealAPITransport)):
             raw_bytes = await self.transport.send(payload.encode())
             raw = raw_bytes.decode() if raw_bytes else "{}"
             return self._parse_response(raw, request.id)
 
-        # Stream transport: send request, then read responses until matching ID
+        # Mock / Stdio transport: send → 轮询 receive
         await self.transport.send(payload.encode())
-        for _ in range(10):  # Max 10 reads to find matching response
+        for _ in range(10):
             raw_bytes = await self.transport.receive()
             if not raw_bytes:
-                return JSONRPCResponse(id=request.id, error={"code": -32000, "message": "No response"})
+                continue
             raw = raw_bytes.decode()
             data = json.loads(raw) if isinstance(raw, str) else raw
             if data.get("id") == request.id:
                 return JSONRPCResponse(
-                id=data.get("id", request.id),
-                result=data.get("result"),
+                    id=data.get("id", request.id),
+                    result=data.get("result"),
                     error=data.get("error"),
                 )
         return JSONRPCResponse(id=request.id, error={"code": -32000, "message": "No matching response"})
+
+    def _parse_response(self, raw: str, request_id: str) -> JSONRPCResponse:
+        """解析 JSON-RPC 响应字符串。"""
+        try:
+            data = json.loads(raw)
+            return JSONRPCResponse(
+                id=data.get("id", request_id),
+                result=data.get("result"),
+                error=data.get("error"),
+            )
+        except json.JSONDecodeError:
+            return JSONRPCResponse(id=request_id, error={"code": -32700, "message": "Parse error"})
 
     async def _rpc_notify(self, method: str, params: Dict):
         """发送 JSON-RPC 通知 (无 id，无响应)。"""
@@ -392,7 +496,7 @@ class MCPToolAdapter:
         adapter = MCPToolAdapter(bridge)
         registry = ToolRegistry()
         await adapter.register_all(registry)
-        # → registry 中自动添加 amap_search_poi, amap_geocode, fs_read_file
+        # → registry 中自动添加所有 MCP 发现的工具
     """
 
     def __init__(self, bridge: MCPClientBridge):
@@ -405,19 +509,21 @@ class MCPToolAdapter:
         for tool_def in tools:
             name = tool_def["name"]
             desc = tool_def.get("description", "")
-            schema = tool_def.get("inputSchema", {})
 
-            # 创建动态函数
-            async def make_tool_func(tool_name, bridge_ref):
-                async def tool_func(**kwargs):
-                    result = await bridge_ref.call_tool(tool_name, kwargs)
+            if name in registry.tool_names:
+                continue
+
+            # 闭包工厂: 为每个工具创建独立的调用函数
+            def _make_func(n: str, b: "MCPClientBridge"):
+                async def _tool(**kwargs):
+                    result = await b.call_tool(n, kwargs)
                     contents = result.get("content", [])
                     return "\n".join(c.get("text", "") for c in contents)
-                tool_func.__name__ = tool_name
-                tool_func.__doc__ = desc
-                return tool_func
+                _tool.__name__ = n
+                _tool.__doc__ = desc
+                return _tool
 
-            func = await make_tool_func(name, self.bridge)
+            func = _make_func(name, self.bridge)
             registry.register(func, name=name, description=desc)
             count += 1
 

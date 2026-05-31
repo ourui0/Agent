@@ -37,12 +37,12 @@ class Embedder:
         """用语料训练 TF-IDF 和 SVD。"""
         if len(texts) < 2:
             texts = texts + ["placeholder"]
-        self._tfidf = TfidfVectorizer(max_features=2000)
+        self._tfidf = TfidfVectorizer(max_features=2000, analyzer="char_wb", ngram_range=(1, 2))
         tfidf_matrix = self._tfidf.fit_transform(texts)
 
         n_components = min(self.dim, tfidf_matrix.shape[1] - 1, tfidf_matrix.shape[0] - 1)
         if n_components > 1:
-            self._svd = TruncatedSVD(n_components=n_components)
+            self._svd = TruncatedSVD(n_components=n_components, random_state=42)
             self._svd.fit(tfidf_matrix)
 
         self._ready = True
@@ -59,6 +59,30 @@ class Embedder:
         if len(v) < self.dim:
             v = np.pad(v, (0, self.dim - len(v)))
         return v[:self.dim].astype(np.float32)
+
+    def save(self, path: str):
+        """保存 Embedder 状态（TF-IDF + SVD），用于恢复一致的向量空间。"""
+        import pickle
+        state = {"tfidf": self._tfidf, "svd": self._svd, "dim": self.dim}
+        with open(f"{path}.emb", "wb") as f:
+            pickle.dump(state, f)
+
+    def load(self, path: str) -> bool:
+        """加载 Embedder 状态，恢复一致的向量空间。"""
+        import pickle, os
+        emb_file = f"{path}.emb"
+        if not os.path.exists(emb_file):
+            return False
+        try:
+            with open(emb_file, "rb") as f:
+                state = pickle.load(f)
+            self._tfidf = state["tfidf"]
+            self._svd = state["svd"]
+            self.dim = state["dim"]
+            self._ready = True
+            return True
+        except Exception:
+            return False
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -289,7 +313,25 @@ class LocalMemoryManager:
         ]
 
     async def inject_memory_to_prompt(self, session_id: str, query: str, base: str) -> str:
-        return TravelMemoryManager.inject_memory_to_prompt.__wrapped__ or base
+        parts = [base]
+
+        prefs = await self.get_long_term_preferences(session_id, query)
+        if prefs:
+            pref_lines = "\n".join(
+                f"- {p['preference']} (置信度: {p['score']:.0%})"
+                for p in prefs[:3]
+            )
+            parts.append(f"\n## 用户长期偏好\n{pref_lines}")
+
+        recent = await self.get_short_term(session_id)
+        if recent:
+            history_text = "\n".join(
+                f"{m.get('role', 'unknown')}: {m.get('content', '')[:100]}"
+                for m in recent[-6:]
+            )
+            parts.append(f"\n## 近期对话历史\n{history_text}")
+
+        return "\n".join(parts)
 
     def detect_preferences(self, text: str) -> list:
         return TravelMemoryManager.PREFERENCE_PATTERNS and [
@@ -297,4 +339,6 @@ class LocalMemoryManager:
             if any(k in text for k in ks)
         ] or []
 
-    async def close(self): pass
+    async def close(self):
+        """本地内存无需释放外部连接，保留数据便于测试和交互会话复用。"""
+        return None

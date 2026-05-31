@@ -1,0 +1,7 @@
+{
+  "illegal_json": "{city: 成都, days: [}",
+  "missing_action": "Thought: 我应该查天气，但没有给出 Action",
+  "wrong_tool": "Thought: 查资料\nAction: teleport_user\nAction Input: {\"city\":\"成都\"}",
+  "infinite_loop": "Thought: 继续思考\nAction: think_more\nAction Input: {}",
+  "hallucinated_tool_call": "{\"tool\":\"book_private_jet_for_free\",\"args\":{\"city\":\"三亚\"}}"
+}

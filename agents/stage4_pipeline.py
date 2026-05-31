@@ -49,8 +49,13 @@ class ContextPipeline:
 
     @staticmethod
     def _build_default_rag() -> TravelRAG:
-        rag = TravelRAG(alpha=0.3)
-        rag.load_knowledge(TravelRAG.default_knowledge())
+        rag = TravelRAG(alpha=0.3, index_dir="data/faiss_index")
+        # 优先从磁盘加载 (秒级), 失败则重建索引
+        if rag.load_from_disk():
+            logger.info("📂 从磁盘恢复 RAG 索引")
+        else:
+            rag.load_knowledge(TravelRAG.default_knowledge())
+            logger.info("🔨 重建 RAG 索引并保存")
         return rag
 
     async def init(self):

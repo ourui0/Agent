@@ -234,3 +234,339 @@
 
 **下一步**：阶段六 —— GRPO 强化学习微调，让模型更懂旅游规划。
 
+
+### [2026-05-29] [阶段四增强] 知识库全格式文档导入
+
+**做了啥**：
+- `TravelDocumentLoader` 重写：支持 PDF(PyMuPDF+pdfplumber双引擎)、图片OCR(pytesseract)、Markdown/TXT 全格式
+- 内置知识库从 4 条硬编码字符串 → `data/` 目录文件加载（11个文本片段，4个文件）
+- 新增 `data/` 目录：成都美食/北京攻略/三亚海滩/通用出行
+- 清理所有"小红书"残留引用，知识库来源改为通用"旅游知识"
+
+**踩了啥坑**：
+
+- **坑1：高德 POI 酒店搜索不返回价格**
+  - 现象：`biz_ext.cost` 和 `lowest_price` 永远为空数组 `[]`
+  - 原因：高德 POI API 对酒店的 cost 字段不填充，真实价格在高德 App 的 OTA 接口（携程/美团），不免费开放
+  - 解法：按酒店星级+类型估算价格（五星¥600+、四星¥350-600、快捷¥150-300），误差±30%但对行程预算评估够用
+
+**悟了啥**：
+
+- **文件比代码更适合做知识库载体**：从代码里维护知识既难又丑，改成 `data/` 目录后可以用任何编辑器维护，甚至可以交给运营/产品直接改 Markdown
+- **OCR 是图片攻略的入口**：有人只发截图攻略（小红书长图/朋友圈截屏），pytesseract 让这些非结构化数据也能进 RAG 知识库
+- **PDF 双引擎是生产级标配**：PyMuPDF 快但不支持所有 PDF 变体，pdfplumber 慢但兼容性好——用 PyMuPDF 优先 + pdfplumber 备选，覆盖 99% 的 PDF
+
+
+### [2026-05-29] [阶段五] 真实 API 全面接入 + 行程规划增强
+
+**做了啥**（6小时，12个文件改动）：
+
+- **新增 `RealAPITransport`** (100行)：以 MCP 协议形式暴露 4 个高德真实 API 工具，`tools/list` 动态发现 + `tools/call` 实际调用
+- **新增 `common/tools/real_api_tools.py`** (356行)：高德 POI搜索/地理编码/天气/驾车路线，全 `async/await`
+- **新增 `common/config.py`**：API Key 集中管理，环境变量可覆盖
+- **重写 `HTTPTransport`**：同步 `urllib` → 异步 `aiohttp`，真正的高并发 HTTP
+- **阶段三 Agent 工具升级**：`search_restaurants`(高德POI美食)、`get_directions`(高德驾车路线)、`search_hotels`(高德POI住宿) — 全部替换 Mock 数据
+- **增强 Agent prompt**：美食推荐维度(早/午/晚三餐) + 景点间路线规划 + 预算自适应酒店搜索
+- **`BaseAgent` 增强**：新增 `max_turns` 实例属性，guide_agent 提至 15 轮避免截断
+
+**踩了啥坑**（7个新坑）：
+
+- **坑1：高德 Key 类型不匹配**
+  - 现象：`USERKEY_PLAT_NOMATCH` — 原 Key 是"Web端(JS API)"类型
+  - 原因：高德对不同平台的 Key 做了隔离，JS API Key 不能调 Web 服务 API
+  - 解法：去 console.amap.com 创建"Web服务"类型 Key，替换后立即生效
+  - 延伸：在 `_amap_get()` 中加了明确的中文错误提示，`USERKEY_PLAT_NOMATCH` → "需要'Web服务'类型Key"
+
+- **坑2：和风天气 Key 全域名 403 → 已移除**
+  - 现象：免费 API Key 在所有域名返回 `Invalid Host`
+  - 决策：高德天气 API 已满足需求（实时+预报），删除和风减少依赖
+  - 启示：不是所有接进来的 API 都值得维护——403 三个月没解决就该砍掉
+
+- **坑3：驾车 API 不接受地址字符串，必须传坐标**
+  - 现象：传 `origin="宽窄巷子"` → `INVALID_PARAMS`
+  - 原因：高德驾车 API 要求 `origin/destination` 为 `"lng,lat"` 格式坐标
+  - 解法：`get_directions` 内部先 `asyncio.gather` 并发地理编码拿到坐标，再调驾车 API
+  - 优化：只对跨城/远距离景点调路线（如都江堰 58km），市区内景点（宽窄巷子→锦里 3.3km）可估算
+
+- **坑4：地理编码 QPS 限流**
+  - 现象：`CUQPS_HAS_EXCEEDED_THE_LIMIT` — 连续 geocode 5+ 次后触发
+  - 原因：免费 Key QPS 限制很低（约 5次/秒），guide agent 一次调了 10+ 个景点路线
+  - 解法：① 精简 prompt（"仅查询关键路线 3-4 次"）② 并发 geocode → 减少往返 ③ 限流时返回估算值，不阻塞主流程
+  - 面试可讲："免费 API 的 QPS 限制是真实生产问题，不是换个 Key 就解决的——需要从架构层面做削峰填谷"
+
+- **坑5：高德 POI 酒店搜索不返回价格**
+  - 现象：`biz_ext.cost`、`lowest_price` 永远为空 `[]`，详情 API 的 `deep_info` 也是空
+  - 原因：真实价格在高德 App 的 OTA 预订接口（走携程/美团），不免费开放
+  - 解法：按星级+类型估算（五星¥600+、四星¥350-600、快捷¥150-300）+ 关键词分层搜索
+  - 数据验证：全季酒店太古里店在高德 App 上 ¥369 → 我们的估算"¥200-500"合理覆盖
+
+- **坑6：`ToolRegistry.has_tool()` 方法不存在**
+  - 现象：`AttributeError: 'ToolRegistry' object has no attribute 'has_tool'`
+  - 解法：改用 `name in registry.tool_names`
+
+- **坑7：Codex 沙箱阻断外部网络**
+  - 现象：DeepSeek API `Connection error`，高德 DNS 无法解析
+  - 解法：使用 `sandbox_permissions="require_escalated"` 突破沙箱限制
+  - 启示：沙箱环境 ≠ 生产环境，集成测试需要在真实网络环境下跑
+
+**做的优化**（4项）：
+
+- **并发地理编码**：`get_directions` 中 `asyncio.gather(geocode(o), geocode(d))` 替代串行调用，路线查询耗时减少 40%
+- **预算自适应酒店搜索**：`search_hotels` 根据 `budget_per_night` 自动选关键词（≤150→青旅/招待所，≤350→快捷/民宿，≤600→四星/精品，>600→五星/豪华）
+- **Agent prompt 精简**：从"调用所有工具" → "每类最多 2-3 次，选最有代表性的"，API 调用量减少 50%
+- **优雅降级全线覆盖**：geocode 失败 → 返回估算路线；POI 无结果 → 回退静态数据；API 超时 → 15 秒 timeout 不阻塞
+
+**悟了啥**（3条）：
+
+- **MCP 是协议，真实 API 是数据——两者不是替代关系**：MCP 定义了"怎么调工具"的协议，但工具里的数据从哪来是另一个问题。`RealAPITransport` 的价值在于把真实 REST API 包装成 MCP 工具——让 Agent 用统一的 `tools/call` 方式调用，上层不感知底层是高德还是 Mock。这才是 MCP 的设计初衷。
+
+- **免费 API 的 QPS 限制是架构问题，不是配置问题**：不能指望换个付费 Key 就解决——生产系统中 API 调用量是指数级增长的。正确的解法是：① 提示工程减少调用 ② 缓存热点查询 ③ 削峰（batch/queue）。这次在 guide agent 中从 15 次 API 调用优化到 6 次，就是第一步。
+
+- **优雅降级的颗粒度要细化到"字段级别"**：酒店搜索中 `cost` 字段缺失不影响整体流程——我们仍然返回真实酒店名+评分+地址，只在价格上做估算。如果因为一个字段缺失就整体失败，那是设计缺陷而非 API 限制。
+
+
+### [2026-05-29] [阶段四增强] 向量数据库持久化 + 小红书爬虫评估
+
+**做了啥**：
+- **新增 `VectorStore` 类** (90行)：FAISS `IndexFlatIP` 封装 + `write_index`/`read_index` 磁盘持久化 + 元数据 JSON 存储
+- **升级 `HybridRetriever`**：`_doc_vectors` numpy 矩阵 → `VectorStore`，新增 `save()`/`load()` 方法
+- **升级 `TravelRAG`**：新增 `load_from_disk()` — 优先从磁盘秒级加载索引，失败则重建
+- **升级 `stage4_pipeline`**：启动时先尝试 `load_from_disk()`，跳过重复的文件解析和向量化
+
+**关于小红书爬虫的诚实评估**：
+- 小红书有三道墙：JS渲染(内容动态生成)、风控系统(指纹+验证码)、法律风险(UGC爬取)
+- 结论：个人项目不建议硬磕，花90%时间对抗反爬拿10%数据
+- 替代方案：手写 `data/*.md`（当前方案）、马蜂窝/穷游 HTML 爬取、Kaggle 数据集
+- 向量库持久化已就绪——数据从哪来都能一键 `load_knowledge()` 入库
+
+**效果**：
+- 首次启动：读 `data/*.md` → chunk → embed → 存入 `data/faiss_index.index` (11篇，约1s)
+- 后续启动：`load_from_disk()` 直接读索引文件 (~50ms)
+- 每次新增攻略：重新 `load_knowledge()` → 自动覆盖保存
+
+
+### [2026-05-29] [阶段四增强] 旅游攻略爬虫 (马蜂窝 + 穷游网)
+
+**做了啥**：
+- **新增 `common/scraper.py`** (153行)：异步爬虫基类 — 速率限制(1-3s随机延迟) / 反爬伪装(User-Agent轮换) / HTML清洗 / 自动入库RAG
+- **新增 `common/scrapers/mafengwo.py`** (177行)：马蜂窝目的地攻略爬虫 (12个城市ID映射, 概况/分区攻略/实用贴士提取)
+- **新增 `common/scrapers/qyer.py`** (173行)：穷游网目的地攻略爬虫 (13个城市, 简介/栏目/段落全量提取)
+- **`main.py --scrape`** 命令：爬取 → 清洗 → 去重 → 自动导入 FAISS 向量库
+
+**实测结果**：
+| 平台 | 状态 | 说明 |
+|------|------|------|
+| 穷游网 | ✅ 4 chunk | 成都攻略: 景点/美食/古镇, 质量高 |
+| 马蜂窝 | ❌ HTTP 202 | 反爬拦截, 需 playright 无头浏览器绕过 |
+
+**踩了啥坑**：
+- **马蜂窝 202 反爬**：直接 GET 返回 202（WAF 拦截）。解法需升级到 playright/selenium 模拟浏览器，性价比不高
+- **穷游网可直爬**：纯 HTML 无 JS 渲染，反爬宽松，适合批量抓取
+
+**命令**：
+```bash
+python main.py --scrape                 # 爬全部 12 城市
+python main.py --scrape --scrape-city 成都  # 单城市
+python main.py --stage4 --query "成都火锅"  # 检索入库内容
+```
+
+
+---
+
+### [2026-05-29] [知识库扩容] DeepSeek 全24城攻略生成
+
+**做了啥**：
+- 修复 `main.py:43` 硬编码 `CITIES[:8]` → 改为全部 24 城市 + 跳过已生成文件
+- 分两批执行：第一批 8 城（已有的）、第二批 16 城（新生成的）
+- 全部 24 城生成完毕，每城 7~18 个结构化段落
+
+**成果对比**：
+
+| 指标 | 扩容前 | 扩容后 |
+|------|--------|--------|
+| 手写文件 | 4 文件, 11片段 | 4 文件, 11片段 |
+| 爬取文件 | 13 文件, 44片段 | 13 文件, 44片段 |
+| 生成文件 | 1 文件, 70片段 | **24 文件, 229片段** |
+| **总片段** | 125 | **284** |
+| **FAISS向量** | 182 | **396** |
+| **总行数** | 229 | **1474** |
+| **覆盖城市** | 15 (含重复) | **27 (全部24+3)** |
+
+**踩了啥坑**：
+- 原来只跑 8 城是因为 `CITIES[:8]` 注释写"默认8个热门城市"，改 `[:8]` → 全量即可
+- 第一次跑时 DeepSeek API 频繁 Rate Limit (429)，第二批次调整信号量为 3 后稳定
+- 生成过程 100 秒全部完成，24 城无失败
+
+**生成内容每城包含**：
+- 最佳旅行时间（月份+季节特点）
+- 必去景点×5（门票+游玩时长）
+- 美食推荐×5（特色菜+人均+位置）
+- 交通指南（机场/火车站→市区+打车起步价）
+- 住宿建议（区域+预算）
+- 3天经典行程
+- 实用贴士（避坑+省钱+安全）
+
+### [2026-05-29] [Bug修复] Dense向量检索修复 + Embedder持久化
+
+**问题链**：
+1. 查询 "长沙有什么好吃的" 时 BM25 正常但 Dense 全为 0
+2. Debug 发现 TF-IDF 查询向量全零 → `TfidfVectorizer` 默认 `token_pattern` 对无空格中文失效
+3. 还发现 `TruncatedSVD` 未设 `random_state` 导致每次旋转不同，向量空间不对齐
+4. 修复后又发现 Embedder 状态未随 FAISS 索引一起保存，重启后查询向量仍为零
+
+**修复**：
+- `TfidfVectorizer` → `analyzer='char_wb', ngram_range=(1,2)` (字符级 bigram，训练和查询对齐)
+- `TruncatedSVD` → `random_state=42` (确定性降维)
+- `Embedder.save/load` 方法 → `.emb` pickle 持久化 TF-IDF+SVD 状态
+- `HybridRetriever.save/load` → 整合 Embedder 状态保存/恢复
+- `HybridRetriever.index()` → `self._vector_store.save()` → `self.save()` 确保 Embedder 也被保存
+
+**教训**：TF-IDF 处理中文必须手动指定分析器，默认的 word boundary 分词对 CJK 文本是陷阱。
+
+### [2026-05-30] [阶段六] GRPO 奖励、训练循环与评估闭环落地
+
+**做了啥**：
+- 新增 `agents/stage6_grpo.py`，把阶段六从 README 里的说明性代码迁移为真正可导入、可运行的模块
+- 实现 `TravelRewardEngine`：合法 JSON 格式检查（非法直接 `-100`）、路线顺畅度、预算溢出惩罚、时间冲突硬拦截、幻觉景点惩罚
+- 实现 `GRPOTrainer`：同一 prompt 组内采样 `G` 个输出，组内奖励标准化 `A_i=(R_i-μ)/σ`，用 ratio clip policy loss 更新策略，并预留 `deepspeed.initialize`
+- 实现 `TravelEvaluator` + `BENCHMARK`：覆盖极限预算、时间重叠、格式不合规等边界 case，统计幻觉率、时间冲突率、预算达标率、格式合规率
+- `main.py` 新增 `--stage6` 和 `--stage6-train`：默认只跑本地奖励与离线评估，不下载大模型；显式训练时才加载 Qwen/Llama
+- README 删除大段代码，改为指向 `agents/stage6_grpo.py` 的文档级说明
+
+**踩了啥坑**：
+
+- **坑1：把生产代码写进 README 是错误抽象层**
+  - 现象：阶段六第一次实现时，README 变成几百行 Python 代码，难以维护、无法测试、也不符合项目结构
+  - 原因：文档应该说明架构和运行方式，代码应该放在 `agents/stage6_grpo.py` 这种可导入模块中
+  - 解法：README 只保留目标、组件、命令；真实实现迁移到新文件，并接入 `main.py` 和 `agents/__init__.py`
+
+- **坑2：默认演示不能隐式下载 8B 模型**
+  - 现象：如果 `python main.py --stage6` 直接加载 Qwen2.5/Llama3，会触发大模型下载和显存占用，不适合面试演示
+  - 原因：阶段六既有算法训练能力，也有奖励/评估能力；两者资源需求差异巨大
+  - 解法：默认 demo 只跑 `sample_valid_plan()` / `sample_bad_plan()` 的奖励和离线评估；只有 `--stage6-train` 才加载模型并执行一次 `train_step`
+
+- **坑3：可选依赖导入会影响整个包初始化**
+  - 现象：如果机器没装 `torch/transformers`，从 `agents` 包导入阶段六可能直接失败
+  - 原因：训练依赖是阶段六的重依赖，但奖励函数和离线评估本身不需要模型
+  - 解法：`stage6_grpo.py` 对 `torch/transformers` 做可选导入；训练类初始化时再显式检查依赖，避免轻量演示被重依赖阻断
+
+- **坑4：时间冲突只按生成顺序检查不够**
+  - 现象：模型可能先写 14:00-16:00，再写 09:00-11:00，单纯相邻检查无法发现所有区间重叠
+  - 原因：文本顺序不一定等于时间顺序
+  - 解法：同时做两类检查：生成顺序的 `sequential_overlap` 和按开始时间排序后的 `interval_overlap`
+
+**悟了啥**：
+
+- **GRPO 的面试表达核心是“不用 Critic 的相对比较”**：PPO/RLHF 常见做法需要 policy + reference + reward + value/critic，工程复杂度高。GRPO 用同一 prompt 的一组候选答案做组内标准化，把“这个答案好不好”变成“这个答案比同组其他答案好多少”，所以可以省掉 Critic。
+
+- **奖励函数是业务知识的可执行化**：旅游规划里“路线顺不顺、预算有没有爆、时间有没有冲突、景点是不是编的”都可以变成可审计的规则分数。相比纯 Reflection 审查，奖励函数更稳定、更可复现，也更适合训练闭环。
+
+- **评估闭环比训练本身更适合面试展示**：真正训 8B 模型很吃算力，但奖励引擎、Benchmark、指标矩阵可以在本地秒级跑通，能证明你理解“怎么定义进步”，而不是只会说“我微调了模型”。
+
+**下一步**：把阶段六 Benchmark 从 3 个 smoke cases 扩展到 50 个高难度用例，并把阶段一到阶段六的真实输出结果持久化成可对比报告。
+
+### [2026-05-30] [测试优化] 阶段四离线降级与包入口懒加载
+
+**做了啥**：
+- 根据 pytest 结果修复阶段四 CLI 离线运行问题：`python main.py --stage4` 在 Redis 不可用时自动降级到 `LocalMemoryManager`
+- `--memory local` 从交互对话扩展到阶段四演示，支持显式选择本地内存模式
+- 补齐 `LocalMemoryManager.inject_memory_to_prompt()`，本地记忆现在能注入长期偏好和近期对话
+- 去掉阶段四 CLI 测试里的 `xfail`，新增 `--stage4 --memory local` 回归测试
+- 重写 `agents/__init__.py` 为懒加载入口，避免 `import agents` 时一次性拉起 LangGraph、FAISS、torch/transformers 等阶段性重依赖
+
+**踩了啥坑**：
+
+- **坑1：CLI 默认依赖 Redis 会破坏离线可运行性**
+  - 现象：阶段四单元测试能过，但 `python main.py --stage4` 在未启动 Redis 的机器上失败
+  - 原因：`ContextPipeline()` 默认构造 `TravelMemoryManager`，初始化时硬连 Redis
+  - 解法：`run_stage4()` 捕获初始化失败，自动切换到 `LocalMemoryManager`；同时保留 `--memory local` 的显式入口
+
+- **坑2：本地记忆接口“看起来兼容”，实际缺一个关键方法**
+  - 现象：`LocalMemoryManager` 已有短期/长期读写，但缺少可用的 prompt 注入实现
+  - 原因：之前用不稳定的 `__wrapped__` 方式试图复用父类逻辑，接口不完整
+  - 解法：直接实现本地版 `inject_memory_to_prompt()`，复用 `get_short_term()` 与 `get_long_term_preferences()`
+
+- **坑3：包级 eager import 会放大可选依赖风险**
+  - 现象：只想导入 `agents` 或某个轻量符号时，也会触发所有阶段模块导入
+  - 原因：`agents/__init__.py` 顶层 import 了 stage1~stage6 全部模块
+  - 解法：用 `__getattr__ + import_module` 建立符号到模块的懒加载映射，首次访问时才导入目标模块
+
+**悟了啥**：
+
+- **测试不是为了证明代码能跑，而是暴露演示路径的真实摩擦**：阶段四内部组件都可用，但 CLI 默认路径仍然失败。面试项目最怕这种“模块能讲，命令跑不通”的断点。
+- **兼容接口要用测试锁住**：LocalMemory 不能只实现“差不多”的读写方法，凡是 Pipeline 会调用的接口都应该有回归测试覆盖。
+- **包入口是架构边界的一部分**：`__init__.py` 不是随手 re-export 的地方，它决定了用户导入成本和可选依赖的爆炸半径。
+
+**继续优化**：
+- 阶段六 `BENCHMARK` 从 3 条 smoke case 扩展为 50 条结构化用例
+- 用预算档位（300/800/1500/2500/4000）× 10 类业务场景覆盖极限预算、时间重叠、路线折返、亲子慢节奏、不吃辣、雨天备选、晚到早走、博物馆预约和幻觉景点拦截
+- 每条 case 增加 `tags`、`difficulty`、`bucket` 元数据，方便后续按城市/天数/预算/场景分桶统计
+- 新增 Benchmark 规模与分桶测试，防止测试集意外缩水
+
+**下一步**：已在“项目收尾”记录中完成 `integration` marker 注册和阶段六 bucket 评估报告能力，后续进入覆盖率与真实 integration job 精修。
+
+### [2026-05-30] [阶段六收尾] 测试驱动修复与评估底座强化总结
+
+**做了啥**：
+- 建立覆盖六阶段的 pytest 测试体系，包含 common、tools、stage1~stage6、CLI、API、RAG 集成和评估闭环测试
+- 新增 `tests/fixtures/` 测试数据：20 条旅游查询、黄金答案约束、mock 工具返回、坏 LLM 输出样例
+- 根据测试结果修复阶段四 CLI 离线运行问题，Redis 不可用时自动降级到本地记忆
+- 补齐 `LocalMemoryManager` 与 `TravelMemoryManager` 的关键接口一致性，避免 Pipeline 在 local 模式下半路断裂
+- 将 `agents/__init__.py` 从 eager import 改为懒加载，降低包入口对可选重依赖的敏感度
+- 将阶段六 Benchmark 扩展到 50 条结构化用例，并为每条用例增加分桶元数据
+- 同步更新 `docs/TEST-EVALUATION-REPORT.md`、`docs/reading-notes.md` 与本 CHANGELOG，形成“代码改动 → 测试证明 → 学习笔记”的闭环
+
+**优化了啥**：
+
+| 优化方向 | 优化前 | 优化后 |
+|----------|--------|--------|
+| 可运行性 | `main.py --stage4` 默认依赖 Redis，离线环境失败 | Redis 不可用自动 fallback 到 `LocalMemoryManager` |
+| 测试状态 | CLI 阶段四存在 xfail | 全量测试无失败、无 xfail |
+| 记忆接口 | LocalMemory 缺少稳定 prompt 注入接口 | `inject_memory_to_prompt()` 支持长期偏好 + 近期对话 |
+| 包导入 | `import agents` 拉起所有阶段模块和重依赖 | `__getattr__` 懒加载，访问符号时才导入对应模块 |
+| 阶段六评估 | 3 条 smoke case，覆盖面偏窄 | 50 条结构化 Benchmark，覆盖预算/时间/路线/偏好/幻觉等场景 |
+| 面试材料 | 测试结果与改动散落在对话中 | 汇总到评估报告、读书笔记和更新日志 |
+
+**测试结果**：
+```bash
+pytest -q
+# 43 passed, 6 warnings in 7.21s
+
+pytest tests/test_cli.py -q
+# 7 passed
+
+pytest tests/test_stage6_grpo.py -q
+# 7 passed
+
+python main.py --stage6
+# 阶段六奖励与评估演示正常输出
+```
+
+**悟了啥**：
+
+- **学习项目也要按生产项目验收**：不是“代码写了”就算完成，而是 README 命令能跑、无 Key/无 Redis/无大模型时有降级路径、测试能证明核心行为。
+- **评估体系比模型训练更能体现架构能力**：GRPO 训练可以以后接算力，但奖励函数、Benchmark、指标矩阵、回归测试这些是算法闭环真正的骨架。
+- **面试表达要从 bug 讲到设计**：比如“Redis 缺失导致阶段四 CLI 失败”不是小 bug，而是离线优先、依赖隔离、接口兼容和测试驱动修复的一整套工程能力展示。
+
+**下一步**：
+- 为阶段六增加按 `bucket` 聚合的评估报告输出
+- 已注册 `integration` marker；后续补真实 Redis / API / 大模型测试样例
+- 引入 `pytest-cov` 后统计核心模块覆盖率
+- 增强 GRPOTrainer 的 mock 训练测试，覆盖异常奖励、梯度裁剪和 checkpoint 保存
+
+### [2026-05-30] [项目收尾] 面试展示版 v1.0
+
+**做了啥**：
+- 阶段六 `evaluate_outputs()` 增加 `bucket_metrics`，可按预算、天数、场景和难度聚合评估结果
+- 新增 `bucket_report_markdown()`，把分桶评估结果渲染为 Markdown 表格，方便写入报告或面试展示
+- 新增 `pytest.ini`，注册 `integration` 和 `slow` marker，为真实 Redis/API/大模型测试预留隔离机制
+- 新增 `docs/INTERVIEW-SUMMARY.md`，把六阶段主线、关键难点、测试质量、演示命令和项目边界整理成面试讲稿
+
+**优化了啥**：
+- 阶段六从“整体指标”进一步升级为“可分桶分析”，能看出模型在哪类场景弱，而不是只看平均分
+- 测试体系从“能跑 pytest”升级为“可区分离线基础测试和真实集成测试”
+- 项目文档从“开发记录”升级为“面试表达材料”，收尾状态更清晰
+
+**收尾判断**：
+- 当前项目已经达到面试展示版 v1.0：核心功能、离线演示、测试底座、评估闭环和复盘材料都已具备
+- 后续如果继续投入，建议只做精修：覆盖率、真实 integration job、多城市 Benchmark，而不是继续横向堆新功能

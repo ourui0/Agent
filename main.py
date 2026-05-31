@@ -5,6 +5,7 @@
   python main.py                              # 默认: 阶段二 LangGraph CLI
   python main.py --stage1                     # 阶段一: 手写三大范式
   python main.py --stage1 --mode reflection   # 阶段一: 仅 Reflection
+  python main.py --stage6                     # 阶段六: GRPO 奖励与评估演示
   python main.py --mock                       # Mock 模式 (无需 API Key)
   python main.py --serve                      # 启动 FastAPI 服务
   python main.py --query "..."                # 自定义查询
@@ -32,6 +33,36 @@ def build_registry() -> ToolRegistry:
         r.register(func, name=name, description=desc)
     return r
 
+
+
+def run_generate_knowledge(city: str = ""):
+    """DeepSeek 批量生成旅游攻略 → 导入 RAG。"""
+    import asyncio
+    from common.knowledge_generator import generate_all_knowledge, generate_city_knowledge, CITIES
+    from agents.stage4_rag import TravelRAG
+
+    cities = [city] if city else [c for c in CITIES if not os.path.exists(f"data/generated/{c}.md")]
+
+    print("=" * 60)
+    print(f"  \U0001f916 DeepSeek 知识生成 ({len(cities)} 城市)")
+    print("=" * 60)
+
+    async def _run():
+        all_chunks = await generate_all_knowledge(cities)
+        print(f"\n  生成: {len(all_chunks)} 条")
+
+        if all_chunks:
+            print("\n-- 导入向量库 --")
+            rag = TravelRAG(index_dir="data/faiss_index")
+            exist = TravelRAG.default_knowledge()
+            rag.load_knowledge(exist + all_chunks)
+            total = len(exist) + len(all_chunks)
+            print(f"  已入库: {total} 条")
+            print(f"  索引: data/faiss_index.index")
+        return all_chunks
+
+    asyncio.run(_run())
+    print("\n\u2705 知识生成完成! python main.py --stage4 \u68c0\u7d22\n")
 
 # ═══════════════════════════════════════════════════════
 # 阶段一
@@ -88,20 +119,49 @@ def run_stage1(query: str, mode: str, mock: bool):
 # 阶段五
 # ═══════════════════════════════════════════════════════════
 
-def run_stage5():
+def run_stage5(use_real_api: bool = False):
     """MCP + A2A + ANP 协议栈演示"""
     from agents.stage5_a2a import demo_stage5
-    asyncio.run(demo_stage5())
+    asyncio.run(demo_stage5(use_real_api))
 
-def run_stage4(query: str):
+
+# ═══════════════════════════════════════════════════════════
+# 阶段六
+# ═══════════════════════════════════════════════════════════
+
+def run_stage6(train: bool = False, model_name: str = "Qwen/Qwen2.5-7B-Instruct"):
+    """GRPO 奖励函数 + 评估闭环演示；可选执行一次真实 train_step。"""
+    from agents.stage6_grpo import run_stage6_demo
+    run_stage6_demo(train=train, model_name=model_name)
+
+
+def run_stage4(query: str, memory_mode: str = "redis"):
     """阶段四: 双轨记忆 + RAG检索 + 上下文压缩"""
     from agents.stage4_pipeline import ContextPipeline
 
     print(f"\n{'='*60}\n  🧠 阶段四: 记忆与RAG\n{'='*60}\n  📝 {query}\n")
 
     async def _run():
-        pipeline = ContextPipeline()
-        await pipeline.init()
+        async def _build_local_pipeline():
+            from agents.stage4_memory import LocalMemoryManager
+            memory = LocalMemoryManager()
+            await memory.init()
+            local_pipeline = ContextPipeline(memory=memory)
+            await local_pipeline.init()
+            return local_pipeline
+
+        if memory_mode == "local":
+            pipeline = await _build_local_pipeline()
+            print("  💾 记忆模式: 本地内存")
+        else:
+            pipeline = ContextPipeline()
+            try:
+                await pipeline.init()
+                print("  💾 记忆模式: Redis + FAISS")
+            except RuntimeError as exc:
+                await pipeline.close()
+                print(f"  ⚠️  Redis 不可用，已降级到本地内存: {exc}")
+                pipeline = await _build_local_pipeline()
 
         session_id = "stage4-demo"
         state = {"user_query": query, "session_id": session_id}
@@ -141,6 +201,9 @@ def run_stage3(query: str, max_revisions: int):
 
     print(f"\n{'─'*60}")
     print(f"  📍 {state.get('city','?')} | 👥{state.get('people','?')}人 📅{state.get('days','?')}天")
+    weather = state.get('weather', '')
+    if weather:
+        print(f"  🌤️  {weather}")
     print(f"  💰 预算¥{state.get('budget','?')} | 💸 总费¥{state.get('total_cost',0):.0f} | {state.get('budget_status','?')}")
     print(f"  🔄 回溯{state.get('_backtrack_count',0)}次")
     for day in state.get("itinerary", []):
@@ -201,6 +264,53 @@ def run_server(host: str, port: int):
 # 主函数
 # ═══════════════════════════════════════════════════════
 
+
+def run_scrape(city: str = ""):
+    """爬取马蜂窝+穷游攻略 -> 清洗 -> 导入 RAG 向量库。"""
+    import asyncio
+    from common.scrapers.mafengwo import scrape_mafengwo_cities
+    from common.scrapers.qyer import scrape_qyer_cities
+    from agents.stage4_rag import TravelRAG
+
+    cities = [city] if city else None
+
+    print("=" * 60)
+    print("  \U0001f577 爬取旅游攻略 (马蜂窝 + 穷游)")
+    print("=" * 60)
+
+    async def _run():
+        all_chunks = []
+        print("\n-- 马蜂窝 --")
+        mfw = await scrape_mafengwo_cities(cities)
+        all_chunks.extend(mfw)
+        print(f"  马蜂窝: {len(mfw)} 条")
+        print("\n-- 穷游网 --")
+        qyer = await scrape_qyer_cities(cities)
+        all_chunks.extend(qyer)
+        print(f"  穷游: {len(qyer)} 条")
+
+        seen = set()
+        unique = []
+        for c in all_chunks:
+            key = c["text"][:50]
+            if key not in seen:
+                seen.add(key)
+                unique.append(c)
+        print(f"\n  去重后: {len(unique)} 条")
+
+        if unique:
+            print("\n-- 导入向量库 --")
+            rag = TravelRAG(index_dir="data/faiss_index")
+            exist = TravelRAG.default_knowledge()
+            rag.load_knowledge(exist + unique)
+            print(f"  已入库: {len(exist) + len(unique)} 条")
+            print(f"  索引文件: data/faiss_index.index")
+        return unique
+
+    asyncio.run(_run())
+    print("\n\u2705 爬取完成! python main.py --stage4 \u691c\u7d22\u65b0\u6570\u636e\n")
+
+
 def main():
     p = argparse.ArgumentParser(description="旅游规划帝")
     p.add_argument("--stage1", action="store_true", help="阶段一: 手写三大范式")
@@ -208,7 +318,13 @@ def main():
     p.add_argument("--stage3", action="store_true", help="阶段三: 自研框架")
     p.add_argument("--stage4", action="store_true", help="阶段四: 记忆与RAG")
     p.add_argument("--stage5", action="store_true", help="阶段五: MCP+A2A协议")
+    p.add_argument("--stage6", action="store_true", help="阶段六: GRPO奖励与评估闭环")
+    p.add_argument("--stage6-train", action="store_true", help="阶段六加载模型并执行一次GRPO训练")
+    p.add_argument("--stage6-model", default="Qwen/Qwen2.5-7B-Instruct", help="阶段六训练模型名")
+    p.add_argument("--real-api", action="store_true", help="阶段五使用真实API (高德地图)")
     p.add_argument("--chat", action="store_true", help="交互对话模式")
+    p.add_argument("--memory", choices=["redis", "local"], default="redis",
+                   help="交互对话/阶段四记忆存储: redis | local")
     p.add_argument("--mode", choices=["react","plan-solve","reflection","all"], default="all", help="阶段一模式")
     p.add_argument("--mock", action="store_true", help="Mock 模式")
     p.add_argument("--query", default="2个人去北京玩3天，预算3000元", help="旅行查询")
@@ -216,11 +332,22 @@ def main():
     p.add_argument("--serve", action="store_true", help="启动 API 服务")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--scrape", action="store_true", help="爬取马蜂窝+穷游攻略并导入RAG")
+    p.add_argument("--scrape-city", default="", help="指定城市 (默认爬全部)")
+    p.add_argument("--generate-knowledge", action="store_true", help="DeepSeek生成旅游攻略并导入RAG")
     args = p.parse_args()
+
+    if args.generate_knowledge:
+        run_generate_knowledge(args.scrape_city)
+        return
+
+    if args.scrape:
+        run_scrape(args.scrape_city)
+        return
 
     if args.chat:
         from chat import run_chat
-        asyncio.run(run_chat(mock=args.mock))
+        asyncio.run(run_chat(mock=args.mock, memory_mode=args.memory))
         return
 
     if args.mock:
@@ -228,10 +355,12 @@ def main():
 
     if args.serve:
         run_server(args.host, args.port)
+    elif args.stage6:
+        run_stage6(args.stage6_train, args.stage6_model)
     elif args.stage5:
-        run_stage5()
+        run_stage5(args.real_api)
     elif args.stage4:
-        run_stage4(args.query)
+        run_stage4(args.query, args.memory)
     elif args.stage3:
         run_stage3(args.query, args.max_revisions)
     elif args.stage1:

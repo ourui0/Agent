@@ -33,3 +33,4 @@ milvus_data/
 *.pt
 *.pth
 checkpoints/
+data/faiss_index.*

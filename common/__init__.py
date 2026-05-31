@@ -7,3 +7,4 @@ __all__ = [
     'BaseAgent', 'ToolRegistry', 'LLMClient',
     'extract_json', 'extract_tag', 'trim_context', 'safe_json_dumps',
 ]
+from .config import get_config, APIConfig, reset_config

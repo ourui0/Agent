@@ -199,3 +199,104 @@
 - ANP 的 URI 寻址在公网环境下如何保证安全？是否需要 mTLS 或其他证书验证？
 - 如果 MCP Server 挂了，Agent 是直接报错还是降级到本地工具？降级策略如何不影响用户体验？
 
+
+### [2026-05-29] 第十章补充：真实 API 接入实战心得
+
+**核心概念**：
+
+- **MCP 协议 ≠ API 数据**：MCP 定义了"怎么调工具"的协议（JSON-RPC 2.0），但工具返回什么数据由底层传输层决定。`RealAPITransport` 的价值在于把 REST API 包装成 MCP 格式——让上层 Agent 用统一的 `tools/list` + `tools/call` 协议交互，底层是 Mock 还是高德对 Agent 透明。
+
+- **免费 API 的三重限制**：不是"能不能调"的问题，而是① QPS 限制（高德免费 5次/秒）② 字段缺失（酒店 cost 永远为空）③ 接口隔离（JS API Key 不能调 Web 服务）。理解这些限制比会调 API 更重要。
+
+- **异步并发的零成本优化**：`asyncio.gather(geocode(A), geocode(B))` 替代串行调用，不写一行缓存代码，不需要消息队列，减少 40% 网络耗时。这是 Python 异步最被低估的能力。
+
+- **优雅降级的颗粒度**：全系统降级 > 模块级降级 > 字段级降级。酒店价格缺失不应导致整个搜索失败——返回真实名称+评分+地址，只在价格上估算，这是字段级降级的最佳实践。
+
+**金句摘录**：
+
+- "调通 API 只需要 10 分钟，理解它的限制需要 10 个小时"
+- "asyncio.gather 是 Python 里最便宜的并发优化——零依赖、零配置、零成本"
+- "优雅降级不是 try/except 包一切，而是'有多少数据做多少事'"
+
+**与项目的关联**：
+
+- `RealAPITransport` 在 `stage5_mcp.py`：100 行实现了 REST→MCP 的协议转换
+- 真实 API 函数在 `common/tools/real_api_tools.py`：343 行覆盖高德 4 类端点
+- Agent 工具升级在 `stage3_travel.py`：`search_restaurants` / `get_directions` / `search_hotels` 三个 @tool 函数
+- 价格估算逻辑在 `search_hotels`：按类型+星级分档，含中英文错误提示
+
+**疑问（已解决）**：
+
+- ~~驾车 API 传地址为什么失败？~~ → 必须传 `"lng,lat"` 坐标，先 geocode 再 driving
+- ~~酒店价格为什么是空的？~~ → OTA 接口不开放，POI 搜索不返回 cost
+- ~~QPS 限制怎么处理？~~ → 提示工程减少调用 + 并发优化 + 估算兜底
+
+**新疑问**：
+
+- 如果知识库有 1000 篇攻略，BM25+Dense 混合检索的延迟会怎样？是否需要引入向量数据库的索引优化？
+- ~~和风天气~~ 已移除，高德天气 API 足够覆盖实时+预报需求
+- 多人协作编辑知识库（data/*.md）时，RAG 索引的更新策略怎么设计？定时刷新 vs 文件监听？
+
+### [2026-05-30] 第十一、十二章：GRPO 强化学习与评估闭环
+
+**核心概念**：
+
+- **奖励函数是业务规则的数学化**：阶段六不再让 LLM 自己“感觉”行程好不好，而是把旅游规划质量拆成可计算信号：格式合规、时间线无冲突、预算不超、路线少折返、景点不幻觉。奖励函数越清晰，模型越容易学到稳定行为。
+
+- **GRPO 的关键是组内相对优势**：同一个 prompt 一次采样 `G` 个答案，用奖励均值 `μ` 和标准差 `σ` 计算 `A_i=(R_i-μ)/σ`。这让训练不需要 Critic，模型只需要知道“我这次生成比同组其他答案好还是差”。
+
+- **Policy Clip Loss 是训练稳定器**：ratio 太大说明新策略偏离旧策略太远，`clip(ratio, 1-ε, 1+ε)` 限制单步更新幅度。它的作用不是让模型学得最快，而是防止一次奖励异常把策略带崩。
+
+- **Reference KL 是安全带**：训练时保留一个冻结参考模型，计算新策略和参考策略的 KL 惩罚，避免模型为了钻奖励函数漏洞而偏离语言能力本身。这对小模型尤其重要。
+
+- **评估闭环比训练日志更重要**：loss 下降只能说明优化器在工作，不能说明旅游规划变好了。必须用 Benchmark 统计幻觉率、时间冲突率、预算达标率、格式合规率，才知道阶段六是否真的改善用户可见行为。
+
+**金句摘录**：
+
+- "Critic 不是强化学习的本体，比较和反馈才是。"
+- "奖励函数是产品价值观的代码化。"
+- "训练 loss 是内部指标，Benchmark 才是用户行为指标。"
+
+**与项目的关联**：
+
+- `TravelRewardEngine` 在 `agents/stage6_grpo.py`：非法 JSON `-100`、时间冲突 `-50`、预算溢出最高 `-10`、路线顺畅 `+5`
+- `GRPOTrainer.sample_group()`：同一 prompt 重复 `G` 份输入，采样多个候选行程
+- `GRPOTrainer.compute_grpo_loss()`：计算组内 reward mean/std、relative advantage、ratio clip loss 和 reference KL
+- `BENCHMARK` / `TravelEvaluator`：把阶段六从“训练代码”闭环到“定量评估”
+- `main.py --stage6`：默认跑轻量奖励和离线评估；`--stage6-train` 才加载模型训练
+
+**疑问**：
+
+- 奖励函数如何避免 reward hacking？例如模型可能为了少犯错只输出很少景点，需要增加“覆盖度/完整性奖励”
+- 组大小 `G=4/8` 如何权衡？G 越大优势估计越稳定，但显存和采样成本越高
+- 当前 Benchmark 只有 smoke test，正式实验应该怎么做数据分桶？城市、预算、天数、冲突类型、交通距离都应该独立统计
+
+### [2026-05-30] 工程化补充：测试驱动的离线可运行性
+
+**核心概念**：
+
+- **离线优先不是 Mock 一切，而是关键路径可降级**：阶段四的 Redis 是生产增强，不应该成为 `main.py --stage4` 的演示前置条件。正确策略是 Redis 可用就走双轨记忆，Redis 不可用就降级到 local memory。
+
+- **懒加载是可选依赖治理**：多阶段 Agent 项目天然会引入 LangGraph、FAISS、torch、transformers 等重依赖。包入口如果 eager import，会把所有依赖风险集中到 `import agents` 一行。懒加载把风险推迟到“真的使用该能力”的时刻。
+
+- **测试报告要反向驱动修复顺序**：优先修明确失败和 xfail，再处理架构风险。这样每次优化都能用测试数量和失败列表量化，而不是停留在主观“感觉更好了”。
+
+**金句摘录**：
+
+- "演示命令能离线跑通，是学习项目的最低交付标准。"
+- "可选依赖必须可选到导入阶段，而不是运行到一半才可选。"
+- "xfail 不是终点，它是一张写给未来自己的维修单。"
+
+**与项目的关联**：
+
+- `main.py --stage4`：Redis 不可用时自动降级到 `LocalMemoryManager`
+- `LocalMemoryManager.inject_memory_to_prompt()`：补齐本地记忆与 Redis 记忆的接口一致性
+- `agents/__init__.py`：用 `__getattr__` 做符号懒加载，保留 `from agents import TravelRewardEngine` 的易用性
+- `tests/test_cli.py`：把阶段四 CLI 从 xfail 变成真实通过的回归测试
+- `tests/test_project_contract.py`：新增包入口懒加载测试，防止未来又退回 eager import
+- `BENCHMARK`：扩展为 50 条带 `tags/difficulty/bucket` 的结构化评估样例，开始具备按预算和业务场景分桶分析的基础
+
+**疑问**：
+
+- 对真实 Redis / 真实 API / 真实模型加载，应该用 pytest marker 还是单独 CI job 隔离？
+- 分桶评估应该输出 Markdown 表格、JSON 报告，还是同时支持两者供面试展示和自动化分析使用？

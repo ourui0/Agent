@@ -18,6 +18,11 @@
 | ANP | Agent Network Protocol | 另一种 Agent 间通信协议 | 阶段五 |
 | GRPO | Group Relative Policy Optimization | DeepSeek-R1 核心训练算法 | 阶段六 |
 | RLHF | Reinforcement Learning from Human Feedback | 基于人类反馈的强化学习 | 阶段六 |
+| Reward Function | 奖励函数 | 把业务好坏转成可优化分数的函数 | 阶段六 |
+| Relative Advantage | 相对优势 | GRPO 中样本奖励减组均值再除以组标准差 | 阶段六 |
+| Policy Clip Loss | 策略裁剪损失 | 用 ratio 裁剪限制策略单步更新幅度 | 阶段六 |
+| Reference KL | 参考模型 KL | 约束训练模型不要偏离冻结参考模型太远 | 阶段六 |
+| Benchmark | 基准测试集 | 用固定难题定量评估模型行为进步 | 阶段六 |
 | Embedding | — | 将文本转为向量的技术 | 阶段四 |
 | Vector DB | — | 存储和检索向量的数据库 | 阶段四 |
 | Orchestrator | — | 多 Agent 编排器 | 阶段三 |

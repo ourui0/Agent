@@ -1,0 +1,11 @@
+{
+  "weather": {"city": "成都", "date": "2026-06-01", "condition": "多云", "temperature": 22},
+  "hotels": [
+    {"name": "青年旅舍", "price_per_night": 60, "rating": 3.5, "location": "市中心"},
+    {"name": "精品民宿", "price_per_night": 280, "rating": 4.5, "location": "景区附近"}
+  ],
+  "flights": [{"origin": "北京", "destination": "成都", "price": 980, "duration_hours": 3}],
+  "attractions": ["武侯祠", "锦里", "人民公园", "宽窄巷子"],
+  "currency": {"USD_CNY": 7.24, "CNY_CNY": 1.0},
+  "split_bill": {"total": 1200, "people": 4, "per_person": 300}
+}

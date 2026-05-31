@@ -129,10 +129,12 @@ class BaseAgent:
         system_prompt: str,
         tools: Optional[List[Callable]] = None,
         temperature: float = 0.3,
+        max_turns: int = 5,
     ):
         self.name = name
         self.system_prompt = system_prompt
         self.temperature = temperature
+        self.max_turns = max_turns
 
         # 注册工具
         self._tools: Dict[str, ToolMetadata] = {}
@@ -144,11 +146,13 @@ class BaseAgent:
                     self._tools[meta.name] = meta
                     self._tool_schemas.append(meta.parameters)
 
-    async def __call__(self, state: dict, max_turns: int = 5) -> dict:
+    async def __call__(self, state: dict, max_turns: int | None = None) -> dict:
         """
         ReAct 式多轮推理: 调 LLM → 执行工具 → 观察 → 再调 LLM → ... → 最终答案。
         最多 max_turns 轮，防止死循环。
         """
+        if max_turns is None:
+            max_turns = self.max_turns
         from common.llm_client import LLMClient
         llm = LLMClient.get()
 
@@ -180,7 +184,11 @@ class BaseAgent:
                             tool_args = json.loads(tc.function.arguments)
                             tool_meta = self._tools.get(tool_name)
                             if tool_meta and tool_meta.func:
-                                result = str(tool_meta.func(**tool_args))
+                                import inspect
+                                if inspect.iscoroutinefunction(tool_meta.func):
+                                    result = str(await tool_meta.func(**tool_args))
+                                else:
+                                    result = str(tool_meta.func(**tool_args))
                                 logger.info(f"  [{self.name}] 🔧 {tool_name}({tool_args}) → {result[:60]}")
                                 # 将 assistant 的 tool_call 和 tool 结果追加回消息
                                 messages.append({

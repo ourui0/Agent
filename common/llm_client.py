@@ -150,25 +150,26 @@ class LLMClient:
                 "total_cost": 1510, "budget_status": "within_budget", "per_person": 755, "analysis": "预算充足"}, ensure_ascii=False)
 
         # ── 阶段一 ReAct ──
-        if self._mock_turn == 1 and "可用工具" in full_ctx:
+        is_react_prompt = "可用工具" in full_ctx and "Thought:" in full_ctx and "Action:" in full_ctx
+        if is_react_prompt and self._mock_turn == 1:
             return (
                 "Thought: 先查天气。\n"
                 "Action: get_weather\n"
                 'Action Input: {"city": "三亚", "date": "2026-06-01"}'
             )
-        if self._mock_turn == 2:
+        if is_react_prompt and self._mock_turn == 2:
             return (
                 "Thought: 再查景点。\n"
                 "Action: search_attractions\n"
                 'Action Input: {"city": "三亚", "top_k": 3}'
             )
-        if self._mock_turn == 3:
+        if is_react_prompt and self._mock_turn == 3:
             return (
                 "Thought: 最后查酒店。\n"
                 "Action: search_hotels\n"
                 'Action Input: {"city": "三亚", "budget_per_night": 500}'
             )
-        if self._mock_turn >= 4 and "请严格按照格式" not in last:
+        if is_react_prompt and self._mock_turn >= 4 and "请严格按照格式" not in last:
             return (
                 "Thought: 信息足够。\n"
                 "Final Answer: 三亚晴32°C，推荐亚龙湾、天涯海角，精品民宿¥280/晚。祝旅途愉快！🌴"
@@ -194,7 +195,7 @@ class LLMClient:
                 "corrections": ["拆分D1行程", "增加餐饮提醒"],
                 "verdict": "NEEDS_FIX", "final_answer": ""
             }, ensure_ascii=False)
-        if "修改意见" in last or "修改后的" in last:
+        if "修改意见" in last or "修改后的" in last or "修改:" in last:
             return "修正后行程已优化，D1上午亚龙湾下午天涯海角，D2南山寺+蜈支洲岛，D3自由活动。餐饮¥150/天。"
         if "请严格按照格式" in last:
             self._mock_turn = 1

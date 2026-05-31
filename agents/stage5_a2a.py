@@ -15,6 +15,7 @@ ANP (Agent Network Protocol) 路由器:
 import asyncio
 import json
 import logging
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -67,7 +68,7 @@ class A2AMessage:
     intent: NegotiationIntent
     payload: Dict[str, Any]
     conversation_id: str = field(default_factory=lambda: str(uuid.uuid4())[:12])
-    timestamp: str = field(default_factory=lambda: asyncio.get_event_loop().time() if asyncio.get_event_loop().is_running() else "")
+    timestamp: str = field(default_factory=lambda: str(time.time()))
 
     def to_json(self) -> str:
         return json.dumps({
@@ -466,41 +467,63 @@ class A2ASessionManager:
 # 阶段五演示入口
 # ═══════════════════════════════════════════════════════════════
 
-async def demo_stage5():
-    """阶段五独立演示: MCP + A2A 完整流程。"""
-    from agents.stage5_mcp import MCPClientBridge, MockTransport, MCPToolAdapter
+
+async def demo_stage5(use_real_api: bool = False):
+    """阶段五独立演示: MCP + A2A 完整流程。
+
+    Args:
+        use_real_api: True=高德地图真实API, False=Mock数据
+    """
+    from agents.stage5_mcp import MCPClientBridge, MockTransport, RealAPITransport, MCPToolAdapter
     from common import ToolRegistry
 
+    mode_str = "🌐 真实API (高德地图)" if use_real_api else "🔸 Mock 数据"
     print("=" * 60)
-    print("  🌐 阶段五: MCP + A2A + ANP 协议栈演示")
+    print(f"  🌐 阶段五: MCP + A2A + ANP 协议栈 [{mode_str}]")
     print("=" * 60)
 
     # ── Part 1: MCP ──
     print("\n── MCP 协议 ──")
-    bridge = MCPClientBridge(transport=MockTransport("amap+fs"))
+
+    if use_real_api:
+        transport = RealAPITransport()
+        print("  📡 传输层: RealAPITransport → 高德地图 Web 服务 API")
+    else:
+        transport = MockTransport("amap+fs")
+        print("  📡 传输层: MockTransport → 预置测试数据")
+
+    bridge = MCPClientBridge(transport=transport)
     await bridge.connect()
     await bridge.initialize()
 
     tools = await bridge.list_tools()
     print(f"  发现 {len(tools)} 个工具:")
     for t in tools:
-        print(f"    🔧 {t['name']}: {t['description'][:50]}")
+        print(f"    🔧 {t['name']}: {t['description'][:60]}")
 
-    resources = await bridge.list_resources()
-    print(f"  发现 {len(resources)} 个资源:")
-    for r in resources:
-        print(f"    📁 {r['uri']}")
+    if not use_real_api:
+        resources = await bridge.list_resources()
+        print(f"  发现 {len(resources)} 个资源:")
+        for r in resources:
+            print(f"    📁 {r['uri']}")
 
-    result = await bridge.call_tool("amap_search_poi", {
-        "keywords": "火锅", "city": "成都", "types": "餐饮"
-    })
-    print(f"  工具调用结果: {result['content'][0]['text'][:80]}...")
+    # 演示工具调用
+    print("\n  ── 工具调用演示 ──")
+    demo_args = {"keywords": "火锅", "city": "成都", "types": "餐饮"}
+    print(f"  📞 amap_search_poi({demo_args})")
+    result = await bridge.call_tool("amap_search_poi", demo_args)
+    text = result.get('content', [{}])[0].get('text', '')
+    lines = text.split('\n')
+    for line in lines[:6]:
+        print(f"     {line[:120]}")
+    if len(lines) > 6:
+        print(f"     ... 共 {len(lines)} 行")
 
     # 注册到 ToolRegistry
     registry = ToolRegistry()
     adapter = MCPToolAdapter(bridge)
     count = await adapter.register_all(registry)
-    print(f"  已注册 {count} 个 MCP 工具到 ToolRegistry")
+    print(f"\n  已注册 {count} 个 MCP 工具到 ToolRegistry")
 
     # ── Part 2: A2A ──
     print("\n── A2A 谈判协议 ──")
@@ -512,16 +535,12 @@ async def demo_stage5():
     security = A2ASecurityMiddleware()
     session_mgr = A2ASessionManager(router, security)
 
-    # 场景: 酒店超预算，向携程特价Agent申请折扣
+    proposal = {"hotel": "希尔顿度假村", "price": 1200, "budget": 800,
+                "check_in": "2026-06-01", "nights": 3}
+
     result = await session_mgr.start_negotiation(
         target_uri="anp://ctrip.com/hotel-agent",
-        proposal={
-            "hotel": "希尔顿度假村",
-            "price": 1200,
-            "budget": 800,
-            "check_in": "2026-06-01",
-            "nights": 3,
-        },
+        proposal=proposal,
     )
 
     print(f"  谈判结果: {result['status']}")
@@ -531,4 +550,4 @@ async def demo_stage5():
         print(f"    Round {h['round']}: {h['action']}")
 
     await bridge.close()
-    print("\n✅ 阶段五演示完成!\n")
+    print(f"\n✅ 阶段五演示完成! [{mode_str}]\n")

@@ -1,0 +1,22 @@
+[
+  {"id": "solo_beijing_3d", "query": "一个人去北京玩3天，预算3000元"},
+  {"id": "couple_chengdu_spicy", "query": "2个人去成都3天，预算2500元，我不吃辣"},
+  {"id": "family_sanya_beach", "query": "一家三口去三亚看海，4天，预算8000元"},
+  {"id": "rainy_shanghai", "query": "上海下雨天适合怎么玩，两个人两天"},
+  {"id": "tight_budget_chengdu", "query": "成都2天极限穷游，预算300元"},
+  {"id": "flight_change", "query": "我临时改签到晚上到北京，第一天行程帮我缩短"},
+  {"id": "elder_lhasa", "query": "带老人去拉萨，腿脚不便，5天"},
+  {"id": "kid_friendly", "query": "带孩子去广州周末亲子游"},
+  {"id": "food_wuhan", "query": "武汉两天美食路线，人均500"},
+  {"id": "hotel_low", "query": "杭州3天，住宿预算每晚不超过200"},
+  {"id": "business_shenzhen", "query": "深圳出差顺便玩一天，靠近福田"},
+  {"id": "winter_harbin", "query": "哈尔滨冬天3天，想看冰雪大世界"},
+  {"id": "allergy_seafood", "query": "青岛3天，不吃海鲜，预算2000"},
+  {"id": "split_bill", "query": "4个人去重庆，帮我估算并AA拆账"},
+  {"id": "visa_tokyo", "query": "中国游客去东京5天需要注意签证和预算"},
+  {"id": "emergency", "query": "在成都旅行时朋友发烧了，附近怎么安排"},
+  {"id": "avoid_crowds", "query": "北京三天，想避开人群和排队"},
+  {"id": "museum_nanjing", "query": "南京博物馆路线，一天，预算500"},
+  {"id": "short_layover", "query": "上海转机8小时，可以去哪儿"},
+  {"id": "anniversary", "query": "情侣纪念日去厦门3天，预算5000"}
+]

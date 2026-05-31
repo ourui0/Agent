@@ -21,7 +21,7 @@
 | 阶段三 | 第七章 | 自研框架 V3.0 | 软件架构抽象、Tool 装饰器、Orchestrator | ✅ |
 | 阶段四 | 第八、九章 | 带记忆与 RAG 的 V4.0 | 向量检索、上下文裁剪、长期记忆 | ✅ |
 | 阶段五 | 第十章 | MCP 生态接入 V5.0 | MCP / A2A / ANP 协议 | ✅ |
-| 阶段六 | 第十一、十二章 | GRPO 微调 V6.0 | 强化学习奖励函数、LLM 训练、评估体系 | ⬜ |
+| 阶段六 | 第十一、十二章 | GRPO 微调 V6.0 | 强化学习奖励函数、LLM 训练、评估体系 | ✅ |
 
 ---
 
@@ -29,7 +29,7 @@
 
 ```
 Agent/
-├── main.py                      # 统一入口 (--stage1~5 / --chat / --serve / --mock)
+├── main.py                      # 统一入口 (--stage1~6 / --chat / --serve / --mock)
 ├── chat.py                      # 交互对话 (日程卡片 + 突发指令 + 记忆)
 ├── common/                      # 共享底座 (全阶段共用，随阶段增强)
 │   ├── llm_client.py            # DeepSeek 客户端 (Mock模式 + 单例)
@@ -38,7 +38,7 @@ Agent/
 │   ├── utils.py                 # JSON解析 / 上下文裁剪 / 序列化
 │   └── tools/
 │       └── travel_tools.py      # 7个旅游工具 + 数据源
-├── agents/                      # Agent 实现 (逐阶段扩展，14个文件)
+├── agents/                      # Agent 实现 (逐阶段扩展，15个文件)
 │   ├── stage1_react.py          # 阶段一: ReAct (while循环 + 正则解析)
 │   ├── stage1_plan_solve.py     # 阶段一: Plan-and-Solve (三阶段分离)
 │   ├── stage1_reflection.py     # 阶段一: Reflection (角色分离审查)
@@ -53,13 +53,20 @@ Agent/
 │   ├── stage4_compressor.py     # 阶段四: 指代消解 + 摘要压缩
 │   ├── stage4_pipeline.py       # 阶段四: 上下文工程集成管道
 │   ├── stage5_mcp.py            # 阶段五: MCP Client 桥接器 (JSON-RPC 2.0)
-│   └── stage5_a2a.py            # 阶段五: A2A 谈判协议 + ANP 路由器
+│   ├── stage5_a2a.py            # 阶段五: A2A 谈判协议 + ANP 路由器
+│   └── stage6_grpo.py           # 阶段六: GRPO 奖励、训练循环、评估闭环
+├── data/                        # 知识库文件 (阶段四增强)
+│   ├── chengdu-food.md          # 成都美食攻略
+│   ├── beijing-tips.md          # 北京旅游攻略
+│   ├── sanya-beach.md           # 三亚海滩攻略
+│   └── general-travel.txt       # 通用出行建议
 ├── api/                         # 接口层 (阶段二引入)
 │   └── server.py                # FastAPI + SSE 流式
 └── docs/                        # 文档
     ├── CHANGELOG.md             # 更新日志 & 问题记录 & 思考
-    ├── INTERVIEW-CHALLENGES.md  # 面试官拷打点 (38题 + 18个真实Bug)
-    ├── reading-notes.md         # 读书笔记 (第4~10章)
+    ├── INTERVIEW-CHALLENGES.md  # 面试官拷打点 (55题 + 27个真实Bug)
+    ├── INTERVIEW-SUMMARY.md     # 面试展示版项目总结
+    ├── reading-notes.md         # 读书笔记 (第4~12章)
     └── glossary.md              # 术语表
 ```
 
@@ -142,12 +149,14 @@ python main.py --stage3 --query "..." # 自定义查询
 
 **功能实现**：
 - **记忆系统**：Redis 短期会话 + FAISS 向量长期偏好
-- **旅游 RAG**：导入小红书攻略、PDF 导览手册，构建知识库
+- **旅游 RAG**：支持 PDF/图片(OCR)/Markdown/TXT 全格式文档导入，混合检索(BM25+Dense)+重排
 - **情境理解**：上下文压缩与精简，精准指代消解
 
-**技术栈**：Redis + FAISS + BM25 + TF-IDF + DeepSeek API
+**技术栈**：Redis + FAISS + BM25 + PyMuPDF + pytesseract + DeepSeek API
 
 **实现文件**：`agents/stage4_memory.py` / `rag.py` / `compressor.py` / `pipeline.py`
+
+**知识库文件**：`data/` 目录下放入 `.md/.txt/.pdf/.png` 即可自动加载
 
 ```bash
 python main.py --stage4 --query "我不吃辣，想去成都，那里有什么好玩的"
@@ -197,15 +206,28 @@ python main.py --stage5              # MCP 工具发现 + A2A 谈判演示
 
 **技术栈**：GRPO + PyTorch + DeepSpeed + 自定义 Reward Function
 
+**实现文件**：`agents/stage6_grpo.py`
+
+**核心组件**：
+- `TravelRewardEngine`：合法 JSON 格式检查（非法 `-100`）、路线顺畅度 `+5`、预算溢出最高 `-10`、时间冲突硬拦截 `-50`
+- `GRPOTrainer`：同 Prompt 组内采样 `G` 个输出，计算 `A_i=(R_i-μ)/σ` 相对优势，使用 ratio clip policy loss 更新策略
+- `TravelEvaluator`：黄金 Benchmark 自动评估幻觉率、时间冲突率、预算达标率，并输出阶段一到阶段六的进化矩阵
+
+```bash
+python main.py --stage6                # 本地奖励引擎 + 离线评估演示，不下载模型
+python main.py --stage6 --stage6-train # 加载模型执行一次 GRPO train_step
+```
+
 ---
 
 ## 🗂️ 核心文档入口
 
 | 文档 | 路径 | 说明 |
 |------|------|------|
-| 📋 更新日志 & 问题 & 思考 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 每次实践后必填，18个真实Bug记录 |
-| 🔥 面试官拷打点 | [docs/INTERVIEW-CHALLENGES.md](docs/INTERVIEW-CHALLENGES.md) | 38道拷打题 + 18个Bug |
-| 📖 读书笔记 | [docs/reading-notes.md](docs/reading-notes.md) | 第4~10章心得 |
+| 📋 更新日志 & 问题 & 思考 | [docs/CHANGELOG.md](docs/CHANGELOG.md) | 每次实践后必填，23个真实Bug记录 |
+| 🔥 面试官拷打点 | [docs/INTERVIEW-CHALLENGES.md](docs/INTERVIEW-CHALLENGES.md) | 55道拷打题 + 27个Bug |
+| 🎯 面试展示总结 | [docs/INTERVIEW-SUMMARY.md](docs/INTERVIEW-SUMMARY.md) | 六阶段主线、亮点、演示命令 |
+| 📖 读书笔记 | [docs/reading-notes.md](docs/reading-notes.md) | 第4~12章心得 |
 | 📚 术语表 | [docs/glossary.md](docs/glossary.md) | Agent 领域术语速查 |
 
 ---
@@ -214,7 +236,7 @@ python main.py --stage5              # MCP 工具发现 + A2A 谈判演示
 
 ```bash
 # 安装依赖
-pip install openai langgraph autogen-agentchat autogen-ext fastapi uvicorn sse-starlette tiktoken redis faiss-cpu rank-bm25
+pip install openai langgraph autogen-agentchat autogen-ext fastapi uvicorn sse-starlette tiktoken redis faiss-cpu rank-bm25 PyMuPDF pdfplumber pytesseract Pillow torch transformers deepspeed
 
 # 配置 DeepSeek API Key
 export DEEPSEEK_API_KEY="sk-xxx"
@@ -230,6 +252,7 @@ python main.py --query "2人北京3天"       # 阶段二: LangGraph (默认)
 python main.py --stage3                   # 阶段三: 自研框架
 python main.py --stage4                   # 阶段四: 记忆与RAG
 python main.py --stage5                   # 阶段五: MCP + A2A 协议
+python main.py --stage6                   # 阶段六: GRPO 奖励与评估闭环
 
 # API 服务
 python main.py --serve
